@@ -169,7 +169,7 @@ function injectStyles() {
     #status { margin-top: auto; font-size: 12px; color: #2c2c2a; line-height: 1.4; }
     #stage {
       flex: 1; display: flex; align-items: center; justify-content: center;
-      padding: 5vh 5vw; background: #FAF7EA;
+      padding: 1vh 5vw 9vh; background: #FAF7EA;
     }
     #canvasFrame {
       display: flex; position: relative;
