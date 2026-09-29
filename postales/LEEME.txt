@@ -1,0 +1,42 @@
+CÓMO AGREGAR UNA POSTAL A LA GALERÍA
+====================================
+
+Cuando alguien te envíe su postal por correo:
+
+1. Guarda la imagen adjunta en esta carpeta (postales/).
+   Usa un nombre simple, sin espacios, por ejemplo: ana-perez.jpg
+
+2. Abre postales.json y agrega sus datos (los copias del correo).
+   Cada postal va entre llaves { }, separada de la anterior por una coma.
+
+   Ejemplo con dos postales:
+
+   [
+     {
+       "imagen": "ana-perez.jpg",
+       "nombre": "Ana Pérez",
+       "desde": "Valparaíso, Chile",
+       "fecha": "29 de septiembre de 2026",
+       "poema": "cada espacio de mí es un poema que respira"
+     },
+     {
+       "imagen": "luis-rojas.jpg",
+       "nombre": "Luis Rojas",
+       "desde": "Lima, Perú",
+       "fecha": "1 de octubre de 2026",
+       "poema": "el texto de su poema"
+     }
+   ]
+
+   Ojo:
+   - "imagen" tiene que ser exactamente el nombre del archivo.
+   - Si el poema tiene comillas ("), escríbelas como \"
+   - La última postal NO lleva coma después de su }.
+
+3. Sube los cambios a GitHub (commit + push). La galería se actualiza sola.
+
+Mientras postales.json esté vacío ( [] ), la web muestra postales de muestra.
+
+Nota: para ver la galería en tu computador, abre la web con un servidor
+local (por ejemplo, "Live Server" en VS Code). Si abres index.html con
+doble clic, el navegador no deja leer postales.json y se ven las de muestra.
