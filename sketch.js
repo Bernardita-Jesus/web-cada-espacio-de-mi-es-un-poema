@@ -54,11 +54,15 @@ let gridLayer;
 
 let modelReady = false;
 let photoReady = false;
+let maskReady = false;  // ya se detectó a la persona en la foto actual
+let photoId = 0;        // cambia con cada foto, para ignorar detecciones viejas
+let renderId = 0;       // cambia con cada dibujo del poema, para ignorar dibujos viejos
+let renderTimer = null; // espera a que dejes de escribir antes de redibujar
 let appState = "vacio"; // vacio -> procesando -> listo
 
 // Elementos de la interfaz
-let uploadBtn, fileInputEl, poemTextarea, generateBtnEl, statusDiv, cnv, canvasFrameEl;
-let textColorWhiteBtn, textColorBlackBtn, saveBtnEl;
+let uploadBtn, fileInputEl, poemTextarea, statusDiv, cnv, canvasFrameEl;
+let textColorWhiteBtn, textColorBlackBtn, saveBtnEl, previewCanvasEl;
 
 // ---------------------------------------------------------------------
 // Ejecuta un trabajo pesado en partes pequeñas, para que la página no
@@ -80,11 +84,255 @@ function runChunked(totalIterations, chunkSize, workFn, onDone) {
   step();
 }
 
-// Evita que p5 fuerce un tamaño fijo al canvas, para que la imagen
-// se vea siempre completa y bien proporcionada.
-function clearInlineCanvasSize(canvasEl) {
-  canvasEl.elt.style.width = "";
-  canvasEl.elt.style.height = "";
+// Da el mismo tamaño a la vista previa y al recuadro del resultado:
+// todo el ancho del panel, con forma de postal (POSTCARD_RATIO). Si así
+// el panel no cabe en la pantalla, los achica lo justo para que quepa.
+// Achica el canvas en pantalla para que la foto quepa adentro sin
+// deformarse; el tamaño real de la imagen no cambia.
+function layoutBoxes() {
+  const stageEl = document.getElementById("stage");
+  const slotEl = document.getElementById("previewSlot");
+  const panelEl = document.getElementById("panel");
+  if (!stageEl || !slotEl || !panelEl) return;
+
+  const innerWidth = (el) => {
+    const st = getComputedStyle(el);
+    return el.clientWidth - parseFloat(st.paddingLeft) - parseFloat(st.paddingRight);
+  };
+  let boxW = Math.max(0, Math.floor(Math.min(innerWidth(stageEl), innerWidth(slotEl))));
+  applyBoxSize(boxW, boxW / POSTCARD_RATIO);
+
+  // Lo que sobra de alto se reparte entre los dos recuadros
+  const overflow = panelEl.scrollHeight - panelEl.clientHeight;
+  if (overflow > 0) {
+    const boxH = Math.max(60, boxW / POSTCARD_RATIO - overflow / 2);
+    applyBoxSize(Math.floor(boxH * POSTCARD_RATIO), Math.floor(boxH));
+  }
+}
+
+function applyBoxSize(boxW, boxH) {
+  for (const el of [canvasFrameEl.elt, document.getElementById("previewBox")]) {
+    el.style.width = boxW + "px";
+    el.style.height = boxH + "px";
+  }
+
+  // El canvas del resultado cabe dentro del recuadro (menos su borde interno)
+  const frameStyle = getComputedStyle(canvasFrameEl.elt);
+  const innerW = boxW - parseFloat(frameStyle.paddingLeft) - parseFloat(frameStyle.paddingRight);
+  const innerH = boxH - parseFloat(frameStyle.paddingTop) - parseFloat(frameStyle.paddingBottom);
+  const scale = Math.min(1, innerW / width, innerH / height);
+  cnv.elt.style.width = Math.floor(width * scale) + "px";
+  cnv.elt.style.height = Math.floor(height * scale) + "px";
+}
+
+function windowResized() {
+  layoutBoxes();
+  drawPreview();
+  buildPostcards();
+}
+
+// ---------------------------------------------------------------------
+// POSTALES (lado derecho)
+// Recorren tres filas en zigzag: entran abajo a la derecha y van hacia
+// la izquierda; al salir, aparecen en la fila del medio y van de
+// izquierda a derecha; al salir, pasan a la fila de arriba y van de
+// derecha a izquierda. Al salir de arriba vuelven a entrar abajo.
+// Por ahora son cuadrados de muestra; en el futuro serán las obras.
+// ---------------------------------------------------------------------
+const POSTCARD_GAP = 24;   // espacio entre postales y entre filas (px)
+const POSTCARD_SPEED = 40; // velocidad (px por segundo)
+const POSTCARD_RATIO = 3 / 2; // ancho / alto, como una foto normal (10x15 cm)
+const POSTCARD_TEST_COLORS = true; // prueba: cada postal con color y número propio, para seguir su recorrido
+
+let postcardEls = [];
+let postcardLayout = null;
+let postcardProgress = 0;  // cuánto ha avanzado la fila completa
+let postcardLastTime = null;
+let postcardsPaused = false;     // el mouse está encima
+let postcardViewerOpen = false;  // hay una postal abierta en grande
+let postcardViewerEl, postcardLargeEl, postcardFrontEl, postcardBackEls;
+
+// Crea tantas postales como caben a lo largo del recorrido completo
+function buildPostcards() {
+  const below = document.getElementById("below");
+  if (!below) return;
+  postcardEls.forEach((el) => el.remove());
+
+  const W = below.clientWidth;
+  const H = below.clientHeight;
+  const cardH = Math.max(40, (H - POSTCARD_GAP * 4) / 3); // tres filas + espacios
+  const cardW = cardH * POSTCARD_RATIO;
+  const rowLength = W + cardW;      // de totalmente afuera a un lado, a totalmente afuera al otro
+  const pathLength = rowLength * 3; // las tres filas seguidas
+  const count = Math.max(1, Math.floor(pathLength / (cardW + POSTCARD_GAP)));
+
+  postcardLayout = { W, cardW, cardH, rowLength, pathLength, spacing: pathLength / count };
+  postcardEls = [];
+  for (let i = 0; i < count; i++) {
+    const el = document.createElement("div");
+    el.className = "postcard";
+    el.style.width = cardW + "px";
+    el.style.height = cardH + "px";
+    if (POSTCARD_TEST_COLORS) {
+      // Solo colores fríos: del verde agua (170) al violeta (270)
+      el.style.background = `hsl(${Math.round(170 + (i * 100) / count)}, 50%, 72%)`;
+      el.textContent = i + 1;
+    }
+    // Datos del reverso. Por ahora son de muestra; en el futuro vendrán
+    // de lo que cada persona escriba al compartir su obra.
+    el.postcardData = {
+      number: i + 1,
+      name: `Persona ${i + 1}`,
+      place: "Ciudad, país",
+      date: "Fecha de envío",
+      poem: "Aquí irá un fragmento del poema que esta persona plasmó en su autorretrato."
+    };
+    el.addEventListener("click", () => openPostcard(el));
+    below.insertBefore(el, postcardViewerEl); // debajo del visor
+    postcardEls.push(el);
+  }
+  placePostcards();
+  if (postcardViewerOpen) sizeLargePostcard();
+}
+
+// Muestra una postal en grande, centrada en el lado derecho, y detiene
+// todas las demás mientras está abierta. Siempre abre por el frente.
+function openPostcard(el) {
+  postcardViewerOpen = true;
+  const data = el.postcardData;
+
+  postcardFrontEl.style.background = getComputedStyle(el).backgroundColor;
+  postcardFrontEl.textContent = el.textContent;
+
+  // Se usa textContent (no innerHTML) porque en el futuro estos datos
+  // los escribirán otras personas
+  postcardBackEls.poem.textContent = data.poem;
+  postcardBackEls.name.textContent = data.name;
+  postcardBackEls.place.textContent = data.place;
+  postcardBackEls.date.textContent = data.date;
+  postcardBackEls.stamp.textContent = "N.º " + data.number;
+
+  postcardLargeEl.classList.remove("flipped");
+  sizeLargePostcard();
+  postcardViewerEl.classList.add("open");
+}
+
+function closePostcard() {
+  postcardViewerOpen = false;
+  postcardsPaused = false; // siguen de inmediato, aunque el mouse siga encima
+  postcardViewerEl.classList.remove("open");
+}
+
+// La postal abierta ocupa lo más posible del lado derecho (con margen),
+// sin deformarse. --h sirve para que las letras del reverso escalen.
+function sizeLargePostcard() {
+  const below = document.getElementById("below");
+  const maxW = below.clientWidth * 0.65;
+  const maxH = below.clientHeight * 0.65;
+  const w = Math.min(maxW, maxH * POSTCARD_RATIO);
+  const h = w / POSTCARD_RATIO;
+  postcardLargeEl.style.width = w + "px";
+  postcardLargeEl.style.height = h + "px";
+  postcardLargeEl.style.setProperty("--h", h + "px");
+}
+
+// Arma el reverso de la postal: a la izquierda el mensaje (poema), a la
+// derecha el sello y los datos de quién la envía
+function buildPostcardBack(backEl) {
+  const make = (cls, parent, text) => {
+    const el = document.createElement("div");
+    el.className = cls;
+    if (text) el.textContent = text;
+    parent.appendChild(el);
+    return el;
+  };
+
+  const message = make("pc-message", backEl);
+  make("pc-label", message, "Poema");
+  const poem = make("pc-poem", message);
+
+  make("pc-divider", backEl);
+
+  const address = make("pc-address", backEl);
+  const stamp = make("pc-stamp", address);
+  const field = (label) => {
+    const line = make("pc-line", address);
+    make("pc-label", line, label);
+    return make("pc-value", line);
+  };
+  const name = field("De");
+  const place = field("Desde");
+  const date = field("Fecha");
+
+  return { poem, name, place, date, stamp };
+}
+
+// Ubica cada postal según cuánto ha avanzado en el recorrido
+function placePostcards() {
+  if (!postcardLayout) return;
+  const { W, cardW, cardH, rowLength, pathLength, spacing } = postcardLayout;
+
+  postcardEls.forEach((el, i) => {
+    const s = (postcardProgress + i * spacing) % pathLength;
+    const leg = Math.floor(s / rowLength); // 0 = abajo, 1 = medio, 2 = arriba
+    const t = s - leg * rowLength;         // avance dentro de esa fila
+    const goingLeft = leg !== 1;           // abajo y arriba van hacia la izquierda
+    const x = goingLeft ? W - t : -cardW + t;
+    const row = 2 - leg;                   // fila en pantalla: 0 arriba ... 2 abajo
+    const y = POSTCARD_GAP + row * (cardH + POSTCARD_GAP);
+    el.style.transform = `translate(${x}px, ${y}px)`;
+  });
+}
+
+function animatePostcards(time) {
+  if (postcardLastTime !== null && !postcardsPaused && !postcardViewerOpen && postcardLayout) {
+    postcardProgress += ((time - postcardLastTime) / 1000) * POSTCARD_SPEED;
+    postcardProgress %= postcardLayout.pathLength;
+  }
+  postcardLastTime = time;
+  placePostcards();
+  requestAnimationFrame(animatePostcards);
+}
+
+function startPostcards() {
+  const below = document.getElementById("below");
+  below.addEventListener("mouseenter", () => { postcardsPaused = true; });  // se detienen al pasar el mouse
+  below.addEventListener("mouseleave", () => { postcardsPaused = false; });
+
+  // Visor: fondo que cubre el lado derecho + la postal en grande, con
+  // frente (la foto) y reverso (los datos)
+  postcardViewerEl = document.createElement("div");
+  postcardViewerEl.id = "postcardViewer";
+  postcardLargeEl = document.createElement("div");
+  postcardLargeEl.className = "postcard-large";
+  const inner = document.createElement("div");
+  inner.className = "postcard-inner";
+  postcardFrontEl = document.createElement("div");
+  postcardFrontEl.className = "postcard-face postcard-front";
+  const back = document.createElement("div");
+  back.className = "postcard-face postcard-back";
+  postcardBackEls = buildPostcardBack(back);
+  inner.append(postcardFrontEl, back);
+  postcardLargeEl.appendChild(inner);
+  const hint = document.createElement("div");
+  hint.id = "postcardHint";
+  hint.textContent = "Toca la postal para darla vuelta";
+  postcardViewerEl.append(postcardLargeEl, hint);
+  below.appendChild(postcardViewerEl);
+
+  // Tocar la postal la da vuelta; tocar fuera de ella (o Esc) la cierra
+  postcardViewerEl.addEventListener("click", (e) => {
+    if (postcardLargeEl.contains(e.target)) postcardLargeEl.classList.toggle("flipped");
+    else closePostcard();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && postcardViewerOpen) closePostcard();
+  });
+
+  buildPostcards();
+  // Si la persona pidió menos movimiento en su computador, quedan quietas
+  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (!reduceMotion) requestAnimationFrame(animatePostcards);
 }
 
 // ---------------------------------------------------------------------
@@ -93,6 +341,7 @@ function clearInlineCanvasSize(canvasEl) {
 function setup() {
   injectStyles();
   buildInterface();
+  startPostcards();
 
   noStroke();
   noLoop(); // sin animación, solo redibuja cuando hace falta
@@ -101,8 +350,8 @@ function setup() {
   bodyPixModel = ml5.bodyPix(CONFIG.bodyPixOptions, () => {
     modelReady = true;
     updateStatus("");
-    refreshGenerateButton();
     redraw();
+    if (photoReady && !maskReady) detectPerson(); // la foto llegó antes que el modelo
   });
 
   redraw();
@@ -116,82 +365,179 @@ function injectStyles() {
     * { box-sizing: border-box; }
     html, body {
       margin: 0; padding: 0; height: 100%;
-      background: #f4f3f1; color: #2c2c2a;
+      background: #F4F4F4; color: #444444;
       font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
       overflow: hidden;
     }
+    /* La página: a la izquierda el panel (28% del ancho),
+       a la derecha las filas de postales */
     #app { display: flex; width: 100vw; height: 100vh; }
-    #sidebar {
-      width: 28%; min-width: 300px;
-      background: #bcd4c7; border-right: 1px solid #dbd9d4;
-      padding: 32px 24px; display: flex; flex-direction: column; gap: 16px;
+    #panel {
+      width: 28%; min-width: 280px; flex-shrink: 0;
+      background: #EBEBEB; border-right: 1px solid #D6D6D6;
+      padding: 20px; display: flex; flex-direction: column; gap: 18px;
+      overflow-y: auto; /* si no cabe todo, el panel hace scroll */
     }
+    #panel > * { flex-shrink: 0; }
+    /* Secciones del panel, una debajo de otra */
+    .col { display: flex; flex-direction: column; gap: 10px; }
+    .col > * { flex-shrink: 0; }
     #title {
-      font-family: Georgia, "Times New Roman", serif;
-      font-size: 32px; font-weight: 700; line-height: 1.25; margin: 0 0 8px 0;
-      color: #AF5515;
+      font-size: 26px; font-weight: 600; line-height: 1.25; margin: 0;
+      color: #333333;
     }
-    .field-label { font-size: 13px; font-weight: 600; color: #85B19B; margin: 6px 0 -6px 0; }
+    .field-label {
+      font-size: 16px; font-weight: 600; line-height: 1.2;
+      color: #555555; margin: 0;
+    }
     .primary-btn {
       display: block; width: 100%; text-align: center;
-      padding: 10px 14px; background: #85B19B; color: #FEFAE5;
+      padding: 10px 14px; background: #555555; color: #FFFFFF;
       border: none; border-radius: 5px; font-size: 13px; font-weight: 600;
       cursor: pointer; font-family: inherit;
     }
-    .primary-btn:hover:not(:disabled) { background: #729d87; }
-    .primary-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .primary-btn:hover:not(:disabled) { background: #333333; }
+    .primary-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    /* Los dos recuadros (vista previa y resultado) miden lo mismo:
+       layoutBoxes() les da el mismo tamaño desde JavaScript */
+    #previewBox {
+      position: relative; background: transparent; border: none;
+      padding: 6px;
+    }
+    #previewBox canvas { display: block; width: 100%; height: 100%; }
+    /* Cuadro del poema como hoja de block: sin fondo, solo renglones */
     #poemInput {
-      width: 100%; background: #FEFAE5; border: 1px solid #dbd9d4;
-      border-radius: 5px; color: #2c2c2a; font-size: 13px; padding: 10px;
+      width: 100%; border: none; border-radius: 0;
+      background-color: transparent;
+      background-image: linear-gradient(to bottom, transparent 23px, #C4C4C4 23px);
+      background-size: 100% 24px;
+      background-attachment: local; /* los renglones se mueven con el texto */
+      color: #444444; font-size: 14px; line-height: 24px; padding: 0 4px;
       resize: vertical; font-family: inherit;
     }
-    #poemInput:focus { outline: none; border-color: #85B19B; }
+    #poemInput:focus { outline: none; }
     .btn-row { display: flex; gap: 8px; }
     .toggle-btn {
       flex: 1;
       padding: 8px 10px;
-      background: #FEFAE5;
-      border: 1px solid #dbd9d4;
+      background: #DADADA;
+      border: 1px solid #DADADA;
       border-radius: 5px;
       font-size: 12px;
       font-weight: 600;
-      color: #2c2c2a;
+      color: #333333;
       cursor: pointer;
       font-family: inherit;
       transition: background 0.15s, border-color 0.15s, color 0.15s;
     }
-    .toggle-btn:hover { border-color: #85B19B; }
+    .toggle-btn:hover { border-color: #888888; }
     .toggle-btn-active {
-      background: #85B19B;
-      border-color: #85B19B;
-      color: #FEFAE5;
+      background: #888888;
+      border-color: #888888;
+      color: #FFFFFF;
     }
-    #status { margin-top: auto; font-size: 12px; color: #2c2c2a; line-height: 1.4; }
+    #status { font-size: 12px; color: #666666; line-height: 1.4; }
+    #previewSlot {
+      min-width: 0; display: flex; align-items: center; justify-content: center;
+      padding: 9px;
+    }
+    #poemInput { resize: none; }
     #stage {
-      flex: 1; display: flex; align-items: center; justify-content: center;
-      padding: 1vh 5vw 9vh; background: #FAF7EA;
+      min-width: 0; min-height: 0; overflow: hidden; display: flex; align-items: center; justify-content: center;
+      padding: 9px;
     }
     #canvasFrame {
-      display: flex; position: relative;
-      max-width: 100%; max-height: 100%;
-    }
-    #canvasFrame.frame-empty {
-      background: #f2eed7; padding: 24px;
+      position: relative; padding: 6px;
+      display: flex; align-items: center; justify-content: center;
     }
     #canvasFrame canvas {
       display: block;
-      max-width: 68vw; max-height: 82vh;
-      width: auto; height: auto;
     }
     .corner {
       position: absolute;
       width: 22px; height: 22px;
       pointer-events: none;
     }
-    .corner-tl { top: -9px; left: -9px; border-top: 3px solid #AF5515; border-left: 3px solid #AF5515; }
-    .corner-tr { top: -9px; right: -9px; border-top: 3px solid #AF5515; border-right: 3px solid #AF5515; }
-    .corner-bl { bottom: -9px; left: -9px; border-bottom: 3px solid #AF5515; border-left: 3px solid #AF5515; }
-    .corner-br { bottom: -9px; right: -9px; border-bottom: 3px solid #AF5515; border-right: 3px solid #AF5515; }
+    .corner-tl { top: -9px; left: -9px; border-top: 3px solid #999999; border-left: 3px solid #999999; }
+    .corner-tr { top: -9px; right: -9px; border-top: 3px solid #999999; border-right: 3px solid #999999; }
+    .corner-bl { bottom: -9px; left: -9px; border-bottom: 3px solid #999999; border-left: 3px solid #999999; }
+    .corner-br { bottom: -9px; right: -9px; border-bottom: 3px solid #999999; border-right: 3px solid #999999; }
+
+    /* Lado derecho: postales que recorren tres filas en zigzag.
+       El movimiento lo hace placePostcards() desde JavaScript. */
+    #below {
+      flex: 1; min-width: 0; position: relative; overflow: hidden;
+      background: #F4F4F4;
+    }
+    .postcard {
+      position: absolute; top: 0; left: 0;
+      border-radius: 4px; background: #D9D9D9;
+      will-change: transform;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 48px; font-weight: 700; color: rgba(0, 0, 0, 0.45); /* número de prueba */
+    }
+    .postcard:nth-child(3n + 2) { background: #C7C7C7; }
+    .postcard:nth-child(3n + 3) { background: #E3E3E3; }
+    .postcard { cursor: pointer; }
+    /* Visor: la postal tocada, en grande y centrada en el lado derecho */
+    #postcardViewer {
+      position: absolute; inset: 0; z-index: 10;
+      display: none; align-items: center; justify-content: center;
+      flex-direction: column; gap: 14px;
+      background: rgba(244, 244, 244, 0.65);
+      cursor: pointer;
+    }
+    #postcardViewer.open { display: flex; animation: viewer-in 0.2s ease-out; }
+    @keyframes viewer-in { from { opacity: 0; } to { opacity: 1; } }
+    #postcardHint { font-size: 12px; color: #666666; }
+    /* La postal grande tiene dos caras y gira al tocarla */
+    .postcard-large { perspective: 1600px; cursor: pointer; }
+    .postcard-inner {
+      position: relative; width: 100%; height: 100%;
+      transform-style: preserve-3d;
+      transition: transform 0.6s ease;
+    }
+    .postcard-large.flipped .postcard-inner { transform: rotateY(180deg); }
+    .postcard-face {
+      position: absolute; inset: 0; border-radius: 6px;
+      backface-visibility: hidden; -webkit-backface-visibility: hidden;
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
+    }
+    .postcard-front {
+      background: #D9D9D9;
+      display: flex; align-items: center; justify-content: center;
+      font-size: calc(var(--h) * 0.3); font-weight: 700; color: rgba(0, 0, 0, 0.45);
+    }
+    /* Reverso: mensaje a la izquierda, línea al medio, datos a la derecha */
+    .postcard-back {
+      transform: rotateY(180deg);
+      background: #FAFAF8; color: #444444;
+      display: flex; padding: calc(var(--h) * 0.08);
+      gap: calc(var(--h) * 0.06);
+      font-size: calc(var(--h) * 0.045);
+    }
+    .pc-message { flex: 1; min-width: 0; }
+    .pc-poem { margin-top: 0.6em; line-height: 1.5; }
+    .pc-divider { width: 1px; background: #CCCCCC; }
+    .pc-address { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+    .pc-stamp {
+      align-self: flex-end;
+      width: calc(var(--h) * 0.22); height: calc(var(--h) * 0.26);
+      border: 2px dashed #AAAAAA; border-radius: 3px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.8em; color: #888888;
+      margin-bottom: auto;
+    }
+    .pc-line {
+      border-bottom: 1px solid #CCCCCC;
+      padding: 0.5em 0 0.3em;
+      display: flex; gap: 0.6em; align-items: baseline;
+    }
+    .pc-label {
+      font-size: 0.7em; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.06em; color: #888888;
+    }
+    .pc-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   `;
   const styleEl = document.createElement("style");
   styleEl.innerHTML = css;
@@ -200,80 +546,93 @@ function injectStyles() {
 
 function buildInterface() {
   const appDiv = createDiv().id("app");
+  const panel = createDiv().id("panel").parent(appDiv);
 
-  // Panel lateral
-  const sidebar = createDiv().id("sidebar").parent(appDiv);
+  // Panel izquierdo, de arriba abajo. Sección 1: título
+  const colTitle = createDiv().id("colTitle").addClass("col").parent(panel);
 
   createElement("h1", "Ahora cada espacio de mí es un poema.")
     .id("title")
-    .parent(sidebar);
+    .parent(colTitle);
+
+  statusDiv = createDiv("Cargando modelo de segmentación…");
+  statusDiv.id("status");
+  statusDiv.parent(colTitle);
+
+  // Sección 2: subir foto + vista previa
+  const colPhoto = createDiv().id("colPhoto").addClass("col").parent(panel);
 
   // Input de archivo escondido; se activa con el botón de subir
   fileInputEl = createFileInput(handleFileSelected);
   fileInputEl.hide();
-  fileInputEl.parent(sidebar);
+  fileInputEl.parent(colPhoto);
 
-  uploadBtn = createButton("Subir tu autorretrato");
+  uploadBtn = createButton("Subir autorretrato");
   uploadBtn.addClass("primary-btn");
-  uploadBtn.parent(sidebar);
+  uploadBtn.parent(colPhoto);
   uploadBtn.mousePressed(() => fileInputEl.elt.click());
 
-  createDiv("Tu poema").addClass("field-label").parent(sidebar);
+  // Vista previa: la foto con la zona detectada como retrato marcada
+  const previewSlot = createDiv().id("previewSlot").parent(colPhoto);
+  const previewBox = createDiv().id("previewBox").parent(previewSlot);
+  previewCanvasEl = document.createElement("canvas");
+  previewBox.elt.appendChild(previewCanvasEl);
+  ["tl", "tr", "bl", "br"].forEach((pos) => {
+    createDiv().addClass("corner corner-" + pos).parent(previewBox);
+  });
 
-  poemTextarea = createElement("textarea", "");
-  poemTextarea.id("poemInput");
-  poemTextarea.attribute("rows", "9");
-  poemTextarea.attribute("placeholder", "Escribe aquí el poema...");
-  poemTextarea.parent(sidebar);
-  poemTextarea.input(refreshGenerateButton);
+  // Sección 3: poema + color de la letra
+  const colPoem = createDiv().id("colPoem").addClass("col").parent(panel);
 
-  generateBtnEl = createButton("Plasmar poema");
-  generateBtnEl.addClass("primary-btn");
-  generateBtnEl.parent(sidebar);
-  generateBtnEl.elt.disabled = true;
-  generateBtnEl.mousePressed(onGenerateClick);
+  createDiv("Escribe tu poema").addClass("field-label").parent(colPoem);
 
-  // Elegir color del poema
-  createDiv("Color del poema").addClass("field-label").parent(sidebar);
-  const colorRow = createDiv().addClass("btn-row").parent(sidebar);
+  const colorRow = createDiv().addClass("btn-row").parent(colPoem);
 
-  textColorWhiteBtn = createButton("Blanca");
+  textColorWhiteBtn = createButton("Letra blanca");
   textColorWhiteBtn.addClass("toggle-btn");
   textColorWhiteBtn.parent(colorRow);
   textColorWhiteBtn.mousePressed(() => setTextColor([255, 255, 255]));
 
-  textColorBlackBtn = createButton("Negra");
+  textColorBlackBtn = createButton("Letra negra");
   textColorBlackBtn.addClass("toggle-btn");
   textColorBlackBtn.parent(colorRow);
   textColorBlackBtn.mousePressed(() => setTextColor([0, 0, 0]));
 
   updateColorButtonsUI();
 
-  // Guardar resultado
-  saveBtnEl = createButton("Guardar imagen");
-  saveBtnEl.addClass("primary-btn");
-  saveBtnEl.parent(sidebar);
-  saveBtnEl.elt.disabled = true;
-  saveBtnEl.mousePressed(onSaveClick);
+  poemTextarea = createElement("textarea", "");
+  poemTextarea.id("poemInput");
+  poemTextarea.attribute("rows", "6");
+  poemTextarea.parent(colPoem);
+  poemTextarea.input(() => schedulePoemRender());
 
-  statusDiv = createDiv("Cargando modelo de segmentación…");
-  statusDiv.id("status");
-  statusDiv.parent(sidebar);
+  // Sección 4: resultado final (se genera solo) + guardar
+  const colResult = createDiv().id("colResult").addClass("col").parent(panel);
 
-  // Zona donde se muestra la foto
-  const stage = createDiv().id("stage").parent(appDiv);
+  // Zona donde se muestra el resultado final
+  const stage = createDiv().id("stage").parent(colResult);
   const canvasFrame = createDiv().id("canvasFrame").parent(stage);
-  canvasFrame.addClass("frame-empty"); // marco vacío hasta subir una foto
   canvasFrameEl = canvasFrame;
 
-  cnv = createCanvas(640, 480); // tamaño provisional, se ajusta al subir la foto
+  cnv = createCanvas(480, 320); // provisional, con forma de postal; se ajusta al subir la foto
   cnv.parent(canvasFrame);
-  clearInlineCanvasSize(cnv);
 
   // Marcas decorativas en las esquinas
   ["tl", "tr", "bl", "br"].forEach((pos) => {
     createDiv().addClass("corner corner-" + pos).parent(canvasFrame);
   });
+
+  // Guardar resultado
+  saveBtnEl = createButton("Guardar imagen");
+  saveBtnEl.addClass("primary-btn");
+  saveBtnEl.parent(colResult);
+  saveBtnEl.elt.disabled = true;
+  saveBtnEl.mousePressed(onSaveClick);
+
+  // Lado derecho: las postales (se crean y mueven en buildPostcards)
+  createDiv().id("below").parent(appDiv);
+
+  layoutBoxes(); // ahora que todo está armado, se puede medir
 }
 
 // ---------------------------------------------------------------------
@@ -290,24 +649,89 @@ function handleFileSelected(file) {
   loadImage(file.data, (img) => {
     originalImg = fitImageToMax(img, CONFIG.maxCanvasSize);
     resizeCanvas(originalImg.width, originalImg.height);
-    clearInlineCanvasSize(cnv);
-    canvasFrameEl.removeClass("frame-empty");
+    layoutBoxes();
 
     photoReady = true;
+    maskReady = false;
+    maskImg = null;
+    photoId++;
     appState = "vacio"; // ya hay foto, falta generar el retrato
-    gridLayer = null;
+    renderId++;         // descarta cualquier dibujo de la foto anterior
+    clearPoemLayer();
 
-    updateStatus("Autorretrato cargado. escribe el poema para plasmarlo en una obra.");
-    refreshGenerateButton();
+    updateStatus("Autorretrato cargado.");
     refreshSaveButton();
     redraw();
+    drawPreview();
+    if (modelReady) detectPerson();
   });
 }
 
-// Solo deja plasmar el poema cuando ya hay modelo, foto y texto
-function refreshGenerateButton() {
-  const poemText = poemTextarea.value().trim();
-  generateBtnEl.elt.disabled = !(modelReady && photoReady && poemText.length > 0);
+// Detecta a la persona en la foto actual y arma la máscara. Se hace
+// apenas se sube la foto, para mostrarla en la vista previa.
+function detectPerson() {
+  const myPhotoId = photoId;
+  updateStatus("Detectando tu retrato…");
+
+  bodyPixModel.segment(originalImg, (err, result) => {
+    if (myPhotoId !== photoId) return; // subieron otra foto mientras tanto
+    if (err) {
+      console.error(err);
+      updateStatus("Error al detectar el retrato. Revisa la consola del navegador.");
+      return;
+    }
+
+    buildMask(result, () => {
+      if (myPhotoId !== photoId) return;
+      maskReady = true;
+      updateStatus("Retrato detectado.");
+      drawPreview();
+      renderPoem(); // si ya había poema, se plasma de inmediato
+    });
+  });
+}
+
+// Dibuja la foto dentro del recuadro de vista previa (sin deformarla) y,
+// si ya se detectó, marca en gris oscuro la zona considerada retrato.
+function drawPreview() {
+  if (!previewCanvasEl) return;
+
+  const boxW = previewCanvasEl.clientWidth;
+  const boxH = previewCanvasEl.clientHeight;
+  const dpr = window.devicePixelRatio || 1;
+  previewCanvasEl.width = Math.round(boxW * dpr);
+  previewCanvasEl.height = Math.round(boxH * dpr);
+
+  const ctx = previewCanvasEl.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, boxW, boxH);
+  if (!photoReady) return;
+
+  const imgW = originalImg.width;
+  const imgH = originalImg.height;
+  const scale = Math.min(boxW / imgW, boxH / imgH);
+  const drawW = imgW * scale;
+  const drawH = imgH * scale;
+  const x = (boxW - drawW) / 2;
+  const y = (boxH - drawH) / 2;
+
+  ctx.drawImage(originalImg.canvas, x, y, drawW, drawH);
+
+  if (maskReady && maskImg) {
+    // Pinta de gris oscuro solo donde la máscara dice "persona"
+    const tint = document.createElement("canvas");
+    tint.width = imgW;
+    tint.height = imgH;
+    const tctx = tint.getContext("2d");
+    tctx.drawImage(maskImg.canvas, 0, 0);
+    tctx.globalCompositeOperation = "source-in";
+    tctx.fillStyle = "#222222";
+    tctx.fillRect(0, 0, imgW, imgH);
+
+    ctx.globalAlpha = 0.5;
+    ctx.drawImage(tint, x, y, drawW, drawH);
+    ctx.globalAlpha = 1;
+  }
 }
 
 // Solo deja guardar cuando ya hay un retrato terminado
@@ -333,22 +757,13 @@ function fitImageToMax(img, maxSize) {
   return img;
 }
 
-// Cambia el color del poema. Si ya estaba plasmado, lo vuelve a
-// dibujar al instante (sin repetir la detección de la persona).
+// Cambia el color del poema y lo vuelve a dibujar al instante
+// (sin repetir la detección de la persona).
 function setTextColor(rgb) {
   CONFIG.textColor = rgb;
   updateColorButtonsUI();
 
-  if (appState === "listo" && maskImg) {
-    const poemText = poemTextarea.value().trim();
-    updateStatus("Actualizando color del poema…");
-    refreshSaveButton();
-    buildPoemLines(poemText, () => {
-      updateStatus("poema plasmado en el autorretrato.");
-      refreshSaveButton();
-      redraw();
-    });
-  }
+  renderPoem();
 }
 
 // Muestra cuál color está elegido
@@ -375,38 +790,53 @@ function onSaveClick() {
 // ---------------------------------------------------------------------
 // ARMAR EL RETRATO (detectar persona + acomodar el poema)
 // ---------------------------------------------------------------------
-function onGenerateClick() {
-  if (!photoReady || !modelReady) return;
+// Espera un momento a que dejes de escribir y luego dibuja el poema,
+// para no recalcular con cada letra.
+function schedulePoemRender() {
+  clearTimeout(renderTimer);
+  renderTimer = setTimeout(renderPoem, 500);
+}
 
+// Dibuja el poema sobre la silueta con lo que haya en este momento.
+// Se llama sola cada vez que cambia la foto, el poema o el color.
+function renderPoem() {
+  clearTimeout(renderTimer);
+  if (!photoReady || !maskReady) return; // falta foto o todavía se detecta la persona
+
+  const myRenderId = ++renderId;
   const poemText = poemTextarea.value().trim();
-  if (poemText.length === 0) return;
 
-  generateBtnEl.elt.disabled = true;
+  // Sin poema: se muestra solo la foto
+  if (poemText.length === 0) {
+    appState = "vacio";
+    clearPoemLayer();
+    refreshSaveButton();
+    redraw();
+    return;
+  }
+
   appState = "procesando";
   refreshSaveButton();
-  updateStatus("Segmentando persona…");
-  redraw();
+  updateStatus("Acomodando el poema sobre la silueta…");
 
-  bodyPixModel.segment(originalImg, (err, result) => {
-    if (err) {
-      console.error(err);
-      updateStatus("Error al segmentar. Revisa la consola del navegador.");
-      refreshGenerateButton();
+  buildPoemLines(poemText, () => myRenderId !== renderId, (layer) => {
+    if (myRenderId !== renderId) {
+      layer.remove(); // llegó un cambio más nuevo; este dibujo ya no sirve
       return;
     }
-
-    updateStatus("Construyendo máscara de la persona…");
-    buildMask(result, () => {
-      updateStatus("Acomodando el poema sobre la silueta…");
-      buildPoemLines(poemText, () => {
-        appState = "listo";
-        updateStatus("poema plasmado en el autorretrato.");
-        refreshGenerateButton();
-        refreshSaveButton();
-        redraw();
-      });
-    });
+    clearPoemLayer();
+    gridLayer = layer;
+    appState = "listo";
+    updateStatus("Poema plasmado en el autorretrato.");
+    refreshSaveButton();
+    redraw();
   });
+}
+
+// Borra la capa del poema anterior (y libera su memoria)
+function clearPoemLayer() {
+  if (gridLayer) gridLayer.remove();
+  gridLayer = null;
 }
 
 // Marca qué píxeles son persona y cuáles son fondo
@@ -474,8 +904,9 @@ function scanRowSegments(mask, y, threshold, minWidth, maxGap) {
 }
 
 // Recorre el cuerpo fila por fila y va llenando cada tramo con
-// palabras del poema, ajustándolas al ancho disponible.
-function buildPoemLines(poemText, onComplete) {
+// palabras del poema, ajustándolas al ancho disponible. Dibuja en una
+// capa nueva y la entrega al terminar; isStale() dice si ya no hace falta.
+function buildPoemLines(poemText, isStale, onComplete) {
   maskImg.loadPixels();
 
   const w = maskImg.width;
@@ -493,14 +924,14 @@ function buildPoemLines(poemText, onComplete) {
   const threshold = CONFIG.cellCoverageThreshold;
   const words = poemToWords(poemText);
 
-  gridLayer = createGraphics(w, h);
-  gridLayer.clear();
-  gridLayer.textFont(CONFIG.fontFamily);
-  gridLayer.textSize(fontSize);
-  gridLayer.textStyle(BOLD);
-  gridLayer.textAlign(CENTER, CENTER);
+  const layer = createGraphics(w, h);
+  layer.clear();
+  layer.textFont(CONFIG.fontFamily);
+  layer.textSize(fontSize);
+  layer.textStyle(BOLD);
+  layer.textAlign(CENTER, CENTER);
 
-  const spaceWidth = gridLayer.textWidth(" ");
+  const spaceWidth = layer.textWidth(" ");
   let wordCursor = 0;
 
   function fillSegment(xStart, xEnd, y) {
@@ -512,7 +943,7 @@ function buildPoemLines(poemText, onComplete) {
 
     while (wordsUsed < maxWordsPerLine) {
       const word = words[wordCursor % words.length];
-      const wordWidth = gridLayer.textWidth(word);
+      const wordWidth = layer.textWidth(word);
       const extra = line.length > 0 ? spaceWidth : 0;
 
       if (usedWidth + extra + wordWidth > availableWidth) break;
@@ -526,20 +957,20 @@ function buildPoemLines(poemText, onComplete) {
     if (line.length === 0) return;
 
     if (CONFIG.showGrid) {
-      gridLayer.push();
-      gridLayer.stroke(
+      layer.push();
+      layer.stroke(
         CONFIG.gridLineColor[0],
         CONFIG.gridLineColor[1],
         CONFIG.gridLineColor[2],
         CONFIG.gridLineAlpha
       );
-      gridLayer.strokeWeight(1);
-      gridLayer.line(xStart, y, xEnd, y);
-      gridLayer.pop();
+      layer.strokeWeight(1);
+      layer.line(xStart, y, xEnd, y);
+      layer.pop();
     }
 
     const cx = xStart + availableWidth / 2;
-    drawLineText(line, cx, y);
+    drawLineText(layer, line, cx, y);
   }
 
   const rows = [];
@@ -548,12 +979,13 @@ function buildPoemLines(poemText, onComplete) {
   }
 
   runChunked(rows.length, 30, (i) => {
+    if (isStale()) return; // no sigue trabajando en un dibujo descartado
     const y = rows[i];
     const segments = scanRowSegments(maskImg, y, threshold, minSegmentWidth, maxRowGap);
     for (const [xStart, xEnd] of segments) {
       fillSegment(xStart, xEnd, y);
     }
-  }, onComplete);
+  }, () => onComplete(layer));
 }
 
 // Reglas de color: cada color de letra tiene su sombra fija, para que
@@ -566,7 +998,7 @@ const SHADOW_COLOR = {
 // Dibuja una línea de texto con su sombra correspondiente detrás,
 // para que se lea bien encima de la foto. Blanca -> sombra negra.
 // Negra -> sombra blanca.
-function drawLineText(line, cx, cy) {
+function drawLineText(layer, line, cx, cy) {
   const isWhiteText =
     CONFIG.textColor[0] === 255 &&
     CONFIG.textColor[1] === 255 &&
@@ -575,16 +1007,16 @@ function drawLineText(line, cx, cy) {
   const shadow = isWhiteText ? SHADOW_COLOR.blanca : SHADOW_COLOR.negra;
 
   if (CONFIG.textOutline) {
-    gridLayer.fill(shadow[0], shadow[1], shadow[2], 160);
-    gridLayer.text(line, cx + 1, cy + 1);
+    layer.fill(shadow[0], shadow[1], shadow[2], 160);
+    layer.text(line, cx + 1, cy + 1);
   }
-  gridLayer.fill(
+  layer.fill(
     CONFIG.textColor[0],
     CONFIG.textColor[1],
     CONFIG.textColor[2],
     CONFIG.textAlpha
   );
-  gridLayer.text(line, cx, cy);
+  layer.text(line, cx, cy);
 }
 
 // ---------------------------------------------------------------------
@@ -598,30 +1030,18 @@ function draw() {
 
   image(originalImg, 0, 0);
 
-  if (appState === "listo" && gridLayer) {
+  if (gridLayer) {
     image(gridLayer, 0, 0);
   }
 }
 
 function drawWaitingScreen() {
-  background(242, 238, 215);
+  background(244, 244, 244);
 
   if (!modelReady) {
-    fill(70, 69, 65);
+    fill(68, 68, 68);
     textAlign(CENTER, CENTER);
     textSize(16);
     text("Cargando modelo de segmentación…", width / 2, height / 2);
-    return;
   }
-
-  fill(175, 85, 21);
-  textAlign(CENTER, CENTER);
-  textSize(20);
-
-  const boxWidth = width * 0.7;
-  const boxHeight = 140;
-  const boxX = (width - boxWidth) / 2;
-  const boxY = (height - boxHeight) / 2;
-
-  text("Sube tu autorretrato y tu poema para plasmarlo", boxX, boxY, boxWidth, boxHeight);
 }
