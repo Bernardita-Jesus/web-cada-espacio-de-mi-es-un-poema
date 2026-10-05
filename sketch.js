@@ -61,7 +61,7 @@ let renderTimer = null; // espera a que dejes de escribir antes de redibujar
 let appState = "vacio"; // vacio -> procesando -> listo
 
 // Elementos de la interfaz
-let uploadBtn, fileInputEl, poemTextarea, statusDiv, cnv, canvasFrameEl;
+let uploadBtn, fileInputEl, poemTextarea, cnv, canvasFrameEl;
 let textColorWhiteBtn, textColorBlackBtn, saveBtnEl, previewCanvasEl;
 let shareBtnEl, shareDialogEl, shareNameEl, shareFromEl, shareConsentEl, shareSubmitEl, shareFileNameEl;
 
@@ -385,7 +385,6 @@ function setup() {
 
   bodyPixModel = ml5.bodyPix(CONFIG.bodyPixOptions, () => {
     modelReady = true;
-    updateStatus("");
     redraw();
     if (photoReady && !maskReady) detectPerson(); // la foto llegó antes que el modelo
   });
@@ -472,7 +471,6 @@ function injectStyles() {
       border-color: #888888;
       color: #FFFFFF;
     }
-    #status { font-size: 12px; color: #666666; line-height: 1.4; }
     #previewSlot {
       min-width: 0; display: flex; align-items: center; justify-content: center;
       padding: 9px;
@@ -620,9 +618,6 @@ function buildInterface() {
     .id("title")
     .parent(colTitle);
 
-  statusDiv = createDiv("Cargando modelo de segmentación…");
-  statusDiv.id("status");
-  statusDiv.parent(colTitle);
 
   // Sección 2: subir foto + vista previa
   const colPhoto = createDiv().id("colPhoto").addClass("col").parent(panel);
@@ -713,11 +708,9 @@ function buildInterface() {
 // ---------------------------------------------------------------------
 function handleFileSelected(file) {
   if (file.type !== "image") {
-    updateStatus("Por favor selecciona un archivo de imagen.");
+    console.warn("El archivo elegido no es una imagen.");
     return;
   }
-
-  updateStatus("Cargando imagen…");
 
   loadImage(file.data, (img) => {
     originalImg = fitImageToMax(img, CONFIG.maxCanvasSize);
@@ -732,7 +725,6 @@ function handleFileSelected(file) {
     renderId++;         // descarta cualquier dibujo de la foto anterior
     clearPoemLayer();
 
-    updateStatus("Autorretrato cargado.");
     refreshSaveButton();
     redraw();
     drawPreview();
@@ -744,20 +736,17 @@ function handleFileSelected(file) {
 // apenas se sube la foto, para mostrarla en la vista previa.
 function detectPerson() {
   const myPhotoId = photoId;
-  updateStatus("Detectando tu retrato…");
 
   bodyPixModel.segment(originalImg, (err, result) => {
     if (myPhotoId !== photoId) return; // subieron otra foto mientras tanto
     if (err) {
       console.error(err);
-      updateStatus("Error al detectar el retrato. Revisa la consola del navegador.");
       return;
     }
 
     buildMask(result, () => {
       if (myPhotoId !== photoId) return;
       maskReady = true;
-      updateStatus("Retrato detectado.");
       drawPreview();
       renderPoem(); // si ya había poema, se plasma de inmediato
     });
@@ -812,10 +801,6 @@ function refreshSaveButton() {
   const ready = appState === "listo";
   if (saveBtnEl) saveBtnEl.elt.disabled = !ready;
   if (shareBtnEl) shareBtnEl.elt.disabled = !ready;
-}
-
-function updateStatus(msg) {
-  if (statusDiv) statusDiv.html(msg);
 }
 
 // Achica la imagen solo si CONFIG.maxCanvasSize tiene un valor definido.
@@ -1004,7 +989,6 @@ function renderPoem() {
 
   appState = "procesando";
   refreshSaveButton();
-  updateStatus("Acomodando el poema sobre la silueta…");
 
   buildPoemLines(poemText, () => myRenderId !== renderId, (layer) => {
     if (myRenderId !== renderId) {
@@ -1014,7 +998,6 @@ function renderPoem() {
     clearPoemLayer();
     gridLayer = layer;
     appState = "listo";
-    updateStatus("Poema plasmado en el autorretrato.");
     refreshSaveButton();
     redraw();
   });
@@ -1224,11 +1207,4 @@ function draw() {
 
 function drawWaitingScreen() {
   background(244, 244, 244);
-
-  if (!modelReady) {
-    fill(68, 68, 68);
-    textAlign(CENTER, CENTER);
-    textSize(16);
-    text("Cargando modelo de segmentación…", width / 2, height / 2);
-  }
 }
