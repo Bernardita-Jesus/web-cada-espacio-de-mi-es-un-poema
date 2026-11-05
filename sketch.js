@@ -28,7 +28,7 @@ const CONFIG = {
   gridLineColor: [255, 255, 255],
   gridLineAlpha: 55,
 
-  fontFamily: "Courier New, monospace",
+  fontFamily: "Courier New",   // un solo nombre: p5 lo pone entre comillas, así que no admite una lista
   fontSize: 13,
   textColor: [255, 255, 255],   // color del poema (blanco por defecto)
   textAlpha: 235,
@@ -554,6 +554,7 @@ function injectStyles() {
     #previewBox:hover #uploadLabel { color: #B5543A; }
     #previewBox.has-photo #uploadLabel { display: none; }
     .toggle-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    #photoError { font-size: 12px; line-height: 1.4; color: #B5543A; text-align: center; padding: 0 6px; }
     /* Cuadro hueso con esquinas para los renglones del poema */
     #poemBox { position: relative; padding: 6px; margin: 9px auto; } /* centrado, como los otros */
     #poemBox::before {
@@ -1004,14 +1005,38 @@ function buildInterface() {
 // ---------------------------------------------------------------------
 // FOTO, POEMA Y BOTONES
 // ---------------------------------------------------------------------
+// Aviso bajo el recuadro de la foto cuando no se puede abrir
+function showPhotoError(msg) {
+  let el = document.getElementById("photoError");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "photoError";
+    document.getElementById("previewSlot").after(el);
+  }
+  el.textContent = msg;
+  clearTimeout(showPhotoError.timer);
+  showPhotoError.timer = setTimeout(() => el.remove(), 9000);
+}
+
 function handleFileSelected(file) {
+  const name = (file.name || "").toLowerCase();
+  const isHeic = /\.(heic|heif)$/.test(name) || /heic|heif/.test(file.subtype || "");
+  if (isHeic) {
+    showPhotoError("Esta foto es HEIC (formato del iPhone) y el navegador no puede abrirla. " +
+      "Expórtala como JPG (en Fotos: Archivo › Exportar) o en el iPhone usa Ajustes › Cámara › Formatos › Más compatible.");
+    return;
+  }
   if (file.type !== "image") {
-    console.warn("El archivo elegido no es una imagen.");
+    showPhotoError("El archivo elegido no es una imagen. Prueba con una foto JPG o PNG.");
     return;
   }
 
+  const failed = () => showPhotoError("No se pudo abrir esta foto. Prueba con otra en JPG o PNG.");
   loadImage(file.data, (img) => {
-    originalImg = fitImageToMax(img, CONFIG.maxCanvasSize);
+    if (!img || !img.width) { failed(); return; }
+    const err = document.getElementById("photoError");
+    if (err) err.remove();
+    originalImg = fitImageToMax(cropIfTooTall(img), CONFIG.maxCanvasSize);
     resizeCanvas(originalImg.width, originalImg.height);
     layoutBoxes();
 
@@ -1029,7 +1054,7 @@ function handleFileSelected(file) {
     drawPreview();
     openMaskEditor(); // la foto se abre en grande mientras se traza la silueta
     if (modelReady) detectPerson();
-  });
+  }, failed);
 }
 
 // Abre la ventana para elegir foto (se limpia antes, para poder elegir
@@ -1380,7 +1405,7 @@ function drawEditorFrame(grid, poem) {
   if (poem > 0 && animLines.length) {
     const scale = Math.max(originalImg.width, H) / CONFIG.referenceSize;
     const fontSize = CONFIG.fontSize * scale;
-    ctx.font = "bold " + fontSize + "px " + CONFIG.fontFamily;
+    ctx.font = "bold " + fontSize + 'px "' + CONFIG.fontFamily + '"'; // la misma letra con que se midió el poema
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     const white = CONFIG.textColor.every((c) => c === 255);
@@ -1996,6 +2021,17 @@ function refreshSaveButton() {
   for (const row of finalRows) row.classList.toggle("ready", ready);
 }
 
+// Si la foto es muy vertical (por ejemplo 9:16 de celular), se recorta a
+// 4:5. Se corta más de abajo que de arriba, para no perder la cabeza.
+const MAX_TALL_RATIO = 5 / 4;   // alto / ancho máximo permitido
+const CROP_TOP_SHARE = 0.3;     // de lo que sobra, cuánto se corta arriba (el resto, abajo)
+function cropIfTooTall(img) {
+  const maxH = Math.round(img.width * MAX_TALL_RATIO);
+  if (img.height <= maxH) return img;
+  const extra = img.height - maxH;
+  return img.get(0, Math.round(extra * CROP_TOP_SHARE), img.width, maxH);
+}
+
 // Achica la imagen solo si CONFIG.maxCanvasSize tiene un valor definido.
 // Por defecto no se toca, para conservar la calidad original de la foto.
 function fitImageToMax(img, maxSize) {
@@ -2186,6 +2222,68 @@ function buildMask(result, onComplete) {
   });
 }
 
+// ---------------------------------------------------------------------
+// SÍLABAS: dónde se puede cortar una palabra (en español) con guion.
+// Reglas básicas: una consonante entre vocales va con la vocal siguiente
+// (ca-sa); dos consonantes se separan (can-to) salvo los grupos que no se
+// separan (bl, br, cl, cr, dr, fl, fr, gl, gr, kl, kr, pl, pr, tr) y las
+// letras dobles ch, ll, rr; dos vocales fuertes se separan (po-e-ma).
+// Nunca deja una sola letra sola a un lado del corte.
+// ---------------------------------------------------------------------
+const MIN_HYPHEN_LETTERS = 7; // solo se cortan con guion las palabras de 7 letras o más
+
+function syllableBreaks(word) {
+  const w = word.toLowerCase();
+  const isVowel = (c) => "aeiouáéíóúü".includes(c);
+  const isStrong = (c) => "aeoáéíóú".includes(c); // í y ú con tilde también se separan
+  const isLetter = (c) => /[a-zñáéíóúü]/.test(c);
+
+  // 1) Unidades: vocales, consonantes (ch/ll/rr/qu/gu cuentan como una) y otros signos
+  const units = [];
+  for (let i = 0; i < w.length;) {
+    const c = w[i], d = w[i + 1] || "", e = w[i + 2] || "";
+    if (!isLetter(c)) { units.push({ i, t: "x", s: c }); i++; continue; }
+    if ((c === "c" && d === "h") || (c === "l" && d === "l") || (c === "r" && d === "r")) {
+      units.push({ i, t: "c", s: c + d }); i += 2; continue;
+    }
+    if ((c === "q" || c === "g") && d === "u" && "eiéí".includes(e)) {
+      units.push({ i, t: "c", s: c + "u" }); i += 2; continue;
+    }
+    if (c === "y" && !isVowel(d)) { units.push({ i, t: "v", s: c }); i++; continue; } // "y" sin vocal después suena a vocal
+    units.push({ i, t: isVowel(c) ? "v" : "c", s: c }); i++;
+  }
+
+  // 2) Recorre: entre dos vocales (o grupos de vocales) decide dónde cortar
+  const inseparable = /^(bl|br|cl|cr|dr|fl|fr|gl|gr|kl|kr|pl|pr|tr)$/;
+  const breaks = [];
+  let lastVowel = -1; // índice de la última unidad vocal vista
+  for (let k = 0; k < units.length; k++) {
+    if (units[k].t === "x") { lastVowel = -1; continue; } // no se corta cerca de signos
+    if (units[k].t !== "v") continue;
+    if (lastVowel >= 0) {
+      const between = units.slice(lastVowel + 1, k); // solo consonantes
+      const n = between.length;
+      if (n === 0) {
+        // dos vocales seguidas: se separan si ambas son fuertes (hiato)
+        if (isStrong(units[lastVowel].s) && isStrong(units[k].s)) breaks.push(units[k].i);
+      } else if (n === 1) {
+        breaks.push(between[0].i);
+      } else if (n === 2) {
+        breaks.push(inseparable.test(between[0].s + between[1].s) ? between[0].i : between[1].i);
+      } else if (n === 3) {
+        breaks.push(inseparable.test(between[1].s + between[2].s) ? between[1].i : between[2].i);
+      } else {
+        breaks.push(between[n - 2].i);
+      }
+    }
+    lastVowel = k;
+  }
+
+  // 3) Sin dejar una letra sola a ningún lado
+  const letters = (str) => (str.match(/[a-zñáéíóúü]/gi) || []).length;
+  return breaks.filter((b) => letters(word.slice(0, b)) >= 2 && letters(word.slice(b)) >= 2);
+}
+
 // Separa el poema en palabras
 function poemToWords(poemText) {
   const cleaned = poemText.replace(/\s+/g, " ").trim();
@@ -2253,7 +2351,10 @@ function buildPoemLines(poemText, isStale, onComplete) {
 
   const spaceWidth = layer.textWidth(" ");
   let wordCursor = 0;
+  let pendingRest = null; // resto de una palabra cortada con guion, va primero en la línea siguiente
   const lines = [];
+  const currentWord = () => (pendingRest !== null ? pendingRest : words[wordCursor % words.length]);
+  const consumeWord = () => { pendingRest = null; wordCursor++; };
 
   function fillSegment(xStart, xEnd, y) {
     const availableWidth = xEnd - xStart;
@@ -2263,15 +2364,27 @@ function buildPoemLines(poemText, isStale, onComplete) {
     const maxWordsPerLine = 200;
 
     while (wordsUsed < maxWordsPerLine) {
-      const word = words[wordCursor % words.length];
+      const word = currentWord();
       const wordWidth = layer.textWidth(word);
       const extra = line.length > 0 ? spaceWidth : 0;
 
-      if (usedWidth + extra + wordWidth > availableWidth) break;
+      if (usedWidth + extra + wordWidth > availableWidth) {
+        // No cabe entera: si es una palabra larga, se corta en la sílaba
+        // más larga que quepa, con guion (las cortas pasan enteras a la otra línea)
+        const room = availableWidth - usedWidth - extra;
+        const isLong = (word.match(/[a-zñáéíóúü]/gi) || []).length >= MIN_HYPHEN_LETTERS;
+        const cut = !isLong ? undefined : syllableBreaks(word).reverse()
+          .find((b) => layer.textWidth(word.slice(0, b) + "-") <= room);
+        if (cut !== undefined) {
+          line += (line.length > 0 ? " " : "") + word.slice(0, cut) + "-";
+          pendingRest = word.slice(cut);
+        }
+        break;
+      }
 
       line += (line.length > 0 ? " " : "") + word;
       usedWidth += extra + wordWidth;
-      wordCursor++;
+      consumeWord();
       wordsUsed++;
     }
 

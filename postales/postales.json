@@ -6,5 +6,13 @@
     "fecha": "Sábado 22 de agosto, invierno 2026",
     "autor": "Bernardita Jesús",
     "poema": "Esto invoca\n\ny no estoy lista para despertar en un clima que no me pertenece,\n\nen una suerte de temporada,\n\nde manifestaciones equívocas."
+  },
+  "2": {
+    "nombre": "Merry Christmas",
+    "desde": "Santiago, Chile",
+    "color": "#F6E1E1",
+    "fecha": "Jueves 5 de noviembre, primavera 2026",
+    "autor": "Alejandra Pizarnik",
+    "poema": "Tú eliges el lugar de la herida\nen donde hablamos nuestro silencio.\nTú haces de mi vida\nesta ceremonia demasiado pura."
   }
 }
