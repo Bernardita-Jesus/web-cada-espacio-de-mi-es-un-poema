@@ -62,8 +62,16 @@ let appState = "vacio"; // vacio -> procesando -> listo
 
 // Elementos de la interfaz
 let fileInputEl, poemTextarea, cnv, canvasFrameEl;
-let textColorWhiteBtn, textColorBlackBtn, saveBtnEl, previewCanvasEl;
-let shareBtnEl, shareDialogEl, shareCopyEl;
+let colorButtonPairs = [];  // botones "Letra blanca / Letra negra" (bajo la foto en grande)
+let previewCanvasEl;
+let finalRows = [];   // filas con "Guardar imagen" y "Enviar mi postal" (en las vistas en grande)
+let lastPoemLines = [];                  // líneas del último poema armado (para animarlo)
+let maskEditorEl, maskEditorCanvasEl;    // ventana para pintar/borrar la silueta en grande
+let maskEditorPaintBtn, maskEditorEraseBtn;
+let maskEditorOpen = false;
+let brushMode = "paint";                 // "paint" (agrega silueta) o "erase" (quita)
+let maskEditorFit = null;                // dónde y a qué escala está la foto en el editor
+let shareDialogEl, shareCopyEl;
 
 // ---------------------------------------------------------------------
 // Ejecuta un trabajo pesado en partes pequeñas, para que la página no
@@ -100,7 +108,7 @@ function layoutBoxes() {
     const st = getComputedStyle(el);
     return el.clientWidth - parseFloat(st.paddingLeft) - parseFloat(st.paddingRight);
   };
-  const BOX_SCALE = 0.75; // los recuadros ocupan un poco menos que el ancho disponible
+  const BOX_SCALE = 0.62; // los recuadros ocupan un poco menos que el ancho disponible
   let boxW = Math.max(0, Math.floor(Math.min(innerWidth(stageEl), innerWidth(slotEl)) * BOX_SCALE));
   applyBoxSize(boxW, boxW / POSTCARD_RATIO);
 
@@ -117,6 +125,9 @@ function applyBoxSize(boxW, boxH) {
     el.style.width = boxW + "px";
     el.style.height = boxH + "px";
   }
+  // El cuadro del poema tiene el mismo ancho (su alto lo dan los renglones)
+  const poemBoxEl = document.getElementById("poemBox");
+  if (poemBoxEl) poemBoxEl.style.width = boxW + "px";
 
   // El canvas del resultado cabe dentro del recuadro (menos su borde interno)
   const frameStyle = getComputedStyle(canvasFrameEl.elt);
@@ -130,6 +141,7 @@ function applyBoxSize(boxW, boxH) {
 function windowResized() {
   layoutBoxes();
   drawPreview();
+  sizeMaskEditor();
   buildPostcards();
 }
 
@@ -282,7 +294,7 @@ function openPostcard(el) {
   // Se usa textContent (no innerHTML) porque estos datos los escriben
   // otras personas
   // Cada postal puede tener su propio color atrás; si no, queda el de siempre
-  postcardLargeEl.querySelector(".postcard-back").style.background = data.backColor || "";
+  postcardLargeEl.querySelector(".postcard-back").style.backgroundColor = data.backColor || "";
   postcardBackEls.poem.textContent = data.poem;
   postcardBackEls.author.textContent = data.poemAuthor ? "Poema por: " + data.poemAuthor : "";
   postcardBackEls.name.textContent = data.name;
@@ -375,7 +387,7 @@ function cursorOnPhoto() {
 }
 
 function animatePostcards(time) {
-  if (postcardLastTime !== null && !postcardViewerOpen && postcardLayout) {
+  if (postcardLastTime !== null && !postcardViewerOpen && !maskEditorOpen && !resultViewerOpen && postcardLayout) {
     const dt = (time - postcardLastTime) / 1000;
     // Con el cursor sobre una foto van más lento (sin detenerse); el cambio es gradual
     const target = cursorOnPhoto() ? POSTCARD_HOVER_SPEED : POSTCARD_SPEED;
@@ -472,18 +484,30 @@ function injectStyles() {
     #panel {
       width: 28%; min-width: 280px; flex-shrink: 0;
       background: #F7E6E3; border-right: 1px solid #E8D2CE; /* rosadito muy claro */
-      padding: 20px; display: flex; flex-direction: column; gap: 18px;
+      padding: 20px; display: flex; flex-direction: column; gap: 0;
       /* título arriba; foto debajo; poema y resultado se reparten el alto */
       overflow-y: auto; /* si no cabe todo, el panel hace scroll */
     }
     #panel > * { flex-shrink: 0; }
     /* Secciones del panel, una debajo de otra */
     .col { display: flex; flex-direction: column; gap: 10px; }
-    #colTitle { margin-bottom: 28px; } /* espacio fijo bajo el título; la foto va justo después */
-    #colPoem, #colResult { margin-top: auto; } /* poema y resultado se reparten el espacio que sobra */
-    #colPoem { margin-bottom: 14px; } /* sube un poco el poema (más aire hacia el resultado) */
-    #colResult { margin-bottom: 8px; } /* aire bajo los botones de guardar y enviar */
-    #colResult .btn-row { margin-top: 28px; } /* botones de guardar y enviar un poco más abajo del resultado */
+    #colTitle { padding-bottom: 16px; gap: 8px; }
+    #subtitle { margin: 0; font-size: 13px; line-height: 1.45; color: #B5543A; } /* descripción breve bajo el título */
+    /* Cada sección es una franja de borde a borde del panel, sin esquinas
+       redondeadas; las tres se reparten el alto hasta abajo. La de la etapa
+       actual se colorea. */
+    .step-card {
+      flex: 1 1 0; justify-content: center;          /* las tres franjas, del mismo alto */
+      margin: 0 -20px; padding: 14px 20px;          /* llega a los bordes del panel */
+      border-top: 1px solid #E8D2CE;
+      background: transparent;
+      transition: background 0.3s;
+    }
+    #colResult { margin-bottom: -20px; }            /* la última llega hasta abajo */
+    .step-card.active {
+      background: rgba(181, 84, 58, 0.12); /* terracota muy suave */
+    }
+    .step-card.active .field-label { color: #B5543A; }
     .col > * { flex-shrink: 0; }
     #title {
       font-size: 26px; font-weight: 600; line-height: 1.25; margin: 0;
@@ -511,14 +535,32 @@ function injectStyles() {
     /* El recuadro de la vista previa es también el botón para subir la foto */
     #previewBox { cursor: pointer; }
     #previewBox:focus-visible { outline: 2px solid #B5543A; outline-offset: 12px; }
+    /* Fondo hueso que llega justo hasta el borde de las esquinas (9px afuera) */
+    #previewBox::before {
+      content: ""; position: absolute; inset: -9px;
+      background: #F3EDDC;
+    }
+    #previewBox canvas { position: relative; } /* encima del fondo */
     #uploadLabel {
       position: absolute; inset: 0;
       display: flex; align-items: center; justify-content: center;
-      font-size: 14px; font-weight: 600; color: #555555;
+      color: #A89F8C; /* ícono de retrato, tono suave sobre el hueso */
       pointer-events: none;
+    }
+    #uploadLabel svg {
+      width: 34%; height: 34%;
+      fill: none; stroke: currentColor; stroke-width: 2.5; stroke-linecap: round;
     }
     #previewBox:hover #uploadLabel { color: #B5543A; }
     #previewBox.has-photo #uploadLabel { display: none; }
+    .toggle-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    /* Cuadro hueso con esquinas para los renglones del poema */
+    #poemBox { position: relative; padding: 6px; margin: 9px auto; } /* centrado, como los otros */
+    #poemBox::before {
+      content: ""; position: absolute; inset: -9px;
+      background: #F3EDDC;
+    }
+    #poemBox textarea { position: relative; } /* encima del fondo */
     /* Cuadro del poema como hoja de block: sin fondo, solo renglones */
     #poemInput {
       width: 100%; border: none; border-radius: 0;
@@ -621,9 +663,169 @@ function injectStyles() {
       user-select: all; /* un clic selecciona todo el correo */
       overflow-wrap: anywhere;
     }
-    .share-list { margin: 0 0 12px; padding-left: 20px; line-height: 1.6; font-size: 14px; }
-    .share-card p.share-group { margin: 0 0 2px; font-weight: 600; color: #333333; }
     .share-card .btn-row { margin-top: 12px; }
+    /* Editor de silueta: la foto en grande sobre las postales */
+    #maskEditor {
+      position: absolute; inset: 0; z-index: 15;
+      display: none; align-items: center; justify-content: center;
+      flex-direction: column; gap: 14px;
+      background: rgba(243, 237, 220, 0.85);
+    }
+    #maskEditor.open { display: flex; animation: viewer-in 0.2s ease-out; }
+    /* Resultado en grande, igual que el editor pero solo para mirar */
+    #resultViewer {
+      position: absolute; inset: 0; z-index: 15;
+      display: none; align-items: center; justify-content: center;
+      flex-direction: column; gap: 14px;
+      background: rgba(243, 237, 220, 0.85);
+      cursor: pointer;
+    }
+    #resultViewer.open { display: flex; animation: viewer-in 0.2s ease-out; }
+    .save-only { width: min(220px, 60%); }
+    #resultViewer img {
+      max-width: 70%; max-height: 65%; object-fit: contain;
+      border-radius: 4px; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15);
+    }
+    #previewBox.has-photo, #canvasFrame { cursor: zoom-in; }
+    #maskEditorCanvas {
+      display: block; touch-action: none; /* sin scroll al pintar con el dedo */
+      border-radius: 4px; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15);
+    }
+    #maskEditorCanvas.can-paint { cursor: crosshair; }
+    /* La foto del editor como postal que gira (frente = foto, reverso = poema) */
+    #maskEditor .editor-card { cursor: default; }
+    .editor-card .editor-front {
+      position: relative;
+      backface-visibility: hidden; -webkit-backface-visibility: hidden;
+    }
+    .editor-card.flipped .postcard-inner { transform: rotateY(180deg); }
+    #maskEditor.done .editor-card { cursor: pointer; } /* en la etapa 3 se puede dar vuelta */
+    /* Etapa 3: guardar solo con los datos completos */
+    #maskEditor:not(.data-ok) .final-row { display: none !important; }
+    /* Arriba: la estampilla para enviar la postal (con los datos completos) */
+    /* Pregunta centrada como título; debajo, el subtítulo con la estampilla */
+    .stamp-offer {
+      display: none; flex-direction: column; align-items: center; gap: 8px;
+      color: #555555; max-width: min(640px, 92%); text-align: center;
+    }
+    .stamp-offer-title {
+      font-size: 24px; font-weight: 600; line-height: 1.2; color: #B5543A; /* como el título de la página */
+    }
+    .stamp-offer-row { display: flex; align-items: center; justify-content: center; gap: 12px; }
+    .stamp-offer-sub { font-size: 14px; color: #666666; }
+    #maskEditor.data-ok .stamp-offer { display: flex; }
+    #maskEditor.stamped .stamp-offer .stamp { visibility: hidden; } /* ya está pegada */
+    .stamp {
+      flex-shrink: 0; width: 66px; height: 82px; padding: 5px; /* mismo tamaño siempre */
+      background: #FFFFFF;
+      /* borde perforado: el centro queda entero y solo el marco lleva agujeros */
+      -webkit-mask: linear-gradient(#000 0 0) content-box,
+                    radial-gradient(circle 2.5px at 4px 4px, transparent 96%, #000) 0 0 / 8px 8px;
+              mask: linear-gradient(#000 0 0) content-box,
+                    radial-gradient(circle 2.5px at 4px 4px, transparent 96%, #000) 0 0 / 8px 8px;
+      filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.15));
+      cursor: grab; touch-action: none; user-select: none;
+    }
+    .stamp.dragging { opacity: 0.3; }
+    .stamp-ghost { position: fixed; z-index: 50; pointer-events: none; transform: translate(-50%, -50%) rotate(-6deg); cursor: grabbing; }
+    .stamp-inner {
+      width: 100%; height: 100%; background: #B5543A; color: #F3EDDC;
+      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+      font-size: 7px; font-weight: 600; letter-spacing: 0.02em; line-height: 1.15;
+      text-align: center; padding: 0 4px;
+    }
+    .stamp-inner svg { width: 55%; height: 42%; fill: none; stroke: currentColor; stroke-width: 3; stroke-linecap: round; }
+    /* Sobre: sube desde abajo, recibe la postal y se cierra */
+    .envelope {
+      position: absolute; left: 50%; bottom: 7%;
+      transform: translate(-50%, 140%);
+      transition: transform 0.8s cubic-bezier(.2,.8,.2,1);
+      pointer-events: none; perspective: 900px;
+      visibility: hidden;
+    }
+    #maskEditor.env-up .envelope { transform: translate(-50%, 0); visibility: visible; }
+    .env-back, .env-front, .env-flap { position: absolute; inset: 0; }
+    .env-back { background-color: #D9C7A7; border-radius: 4px; box-shadow: 0 10px 30px rgba(0,0,0,0.18); }
+    .env-front {
+      background-color: #E7D8BC; border-radius: 0 0 4px 4px;
+      clip-path: polygon(0 0, 50% 56%, 100% 0, 100% 100%, 0 100%); /* bolsillo: todo menos la "V" de arriba */
+    }
+    .env-flap {
+      background-color: #CDB894;
+      clip-path: polygon(0 0, 100% 0, 50% 56%);
+      transform-origin: top center;
+      transform: rotateX(180deg);                        /* abierta: apunta hacia arriba */
+      transition: transform 0.7s ease-in-out;
+    }
+    /* Capas: fondo del sobre (2) < postal (3) < bolsillo y solapa cerrada (4).
+       La solapa abierta va atrás; al cerrarse se usa la de adelante. */
+    .env-layer-back { z-index: 2; }
+    .env-layer-front { z-index: 4; }
+    #maskEditor.sending .editor-card { position: relative; z-index: 3; }
+    .flap-front { visibility: hidden; }
+    #maskEditor.env-closing .flap-back { visibility: hidden; }
+    #maskEditor.env-closing .flap-front { visibility: visible; transform: rotateX(0deg); }
+    #maskEditor.env-closing .editor-card { opacity: 0; } /* ya tapada por la solapa */
+    /* Mientras se ensobra, desaparecen botones y textos */
+    #maskEditor.sending .final-block,
+    #maskEditor.sending .stamp-offer,
+    #maskEditor.sending .mask-editor-hint,
+    #maskEditor.sending .mask-editor-tools { display: none !important; }
+    /* Mensaje final, arriba del sobre */
+    .sent-message {
+      display: none; max-width: min(460px, 90%); text-align: center;
+      color: #444444; font-size: 14px; line-height: 1.5;
+      position: absolute; top: 12%; left: 50%; transform: translateX(-50%);
+    }
+    .sent-message p { margin: 0 0 10px; }
+    .sent-message .sent-copy { width: auto; display: inline-block; padding: 9px 22px; margin: 0 0 12px; }
+    .sent-title { font-size: 18px; font-weight: 600; color: #B5543A; }
+    #maskEditor.sent .sent-message { display: block; animation: viewer-in 0.4s ease-out; }
+    /* Reverso editable */
+    .pc-top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: auto; gap: 0.6em; }
+    .pc-top .pc-stamp { margin-bottom: 0; }
+    .pc-top { justify-content: flex-end; }
+    /* Fecha escrita con palabras; el calendario queda escondido detrás */
+    .pc-date-line { position: relative; cursor: pointer; }
+    .pc-date-text { color: #444444; }
+    .pc-date-text.empty { color: #BBBBBB; }
+    .pc-date-input {
+      position: absolute; left: 0; bottom: 0; width: 1px; height: 1px;
+      opacity: 0; pointer-events: none; border: 0; padding: 0;
+    }
+    /* Arriba, en la etapa 3 hasta completar los datos */
+    .complete-prompt {
+      display: none; font-size: 14px; font-weight: 600; color: #B5543A;
+      text-align: center; max-width: min(560px, 90%);
+    }
+    #maskEditor.step3:not(.data-ok):not(.sending) .complete-prompt { display: block; }
+    .pc-stamp.drop-over { border-color: #B5543A; background: rgba(181, 84, 58, 0.08); }
+    /* Pegada: la estampilla mantiene su tamaño, centrada en el recuadro */
+    .pc-stamp.stamped { border-color: transparent; font-size: inherit; }
+    .pc-stamp.stamped .stamp { cursor: default; }
+    .pc-input {
+      flex: 1; min-width: 0; border: none; background: transparent; outline: none;
+      font: inherit; color: #444444; padding: 0;
+    }
+    .pc-input::placeholder { color: #BBBBBB; }
+    .pc-author-row { display: flex; gap: 0.4em; align-items: baseline; }
+    .pc-author-row .pc-input { color: #666666; }
+
+    #maskEditor.done, #maskEditor.done #maskEditorCanvas { cursor: pointer; }
+    .mask-editor-tools { width: min(560px, 90%); }
+    .mask-editor-tools button { white-space: nowrap; }
+    #maskChange { flex: 1.6; } /* el texto más largo, un poco más ancho */
+    /* Guardar / Enviar: solo con el poema listo (y en el editor, al terminar la animación) */
+    .final-block { width: min(420px, 90%); display: flex; flex-direction: column; gap: 8px; }
+    .color-row .primary-btn { flex: 1; width: auto; }
+    .final-block.confirmed .color-row { display: none; } /* tras "Listo" se reemplaza por guardar/enviar */
+    .final-row, .final-block:not(.confirmed) .final-row.ready { display: none; }
+    .final-row .primary-btn { flex: 1; width: auto; }
+    .final-row.ready { display: flex; }
+    #maskEditor:not(.done) .final-block { display: none; }
+    #maskEditor.done .mask-editor-tools { display: none; } /* en su lugar van guardar/enviar */
+    .mask-editor-tools .primary-btn { flex: 1; width: auto; }
+    .mask-editor-hint { font-size: 12px; color: #666666; }
     /* Visor: la postal tocada, en grande y centrada en el lado derecho */
     #postcardViewer {
       position: absolute; inset: 0; z-index: 10;
@@ -656,7 +858,7 @@ function injectStyles() {
     /* Reverso: mensaje a la izquierda, línea al medio, datos a la derecha */
     .postcard-back {
       transform: rotateY(180deg);
-      background: #F7F3EA; color: #444444; /* color hueso suave */
+      background-color: #F7F3EA; color: #444444; /* color hueso suave */
       display: flex; padding: calc(var(--h) * 0.08);
       gap: calc(var(--h) * 0.06);
       font-size: calc(var(--h) * 0.045);
@@ -700,10 +902,13 @@ function buildInterface() {
   createElement("h1", "Ahora cada espacio<br>de mí es un poema")
     .id("title")
     .parent(colTitle);
+  createP("Una web para representarte y cubrirte de un poema. Subes tu foto, escribes, y tus palabras se acomodan dentro de tu silueta.")
+    .id("subtitle")
+    .parent(colTitle);
 
 
   // Sección 2: subir foto + vista previa
-  const colPhoto = createDiv().id("colPhoto").addClass("col").parent(panel);
+  const colPhoto = createDiv().id("colPhoto").addClass("col step-card").parent(panel);
 
   // Input de archivo escondido; se activa al tocar el recuadro de la vista previa
   fileInputEl = createFileInput(handleFileSelected);
@@ -712,54 +917,71 @@ function buildInterface() {
 
   // Vista previa: la foto con la zona detectada como retrato marcada.
   // El mismo recuadro sirve para subir (o cambiar) el autorretrato.
+  createDiv("Silueta de autorretrato").addClass("field-label").parent(colPhoto);
   const previewSlot = createDiv().id("previewSlot").parent(colPhoto);
   const previewBox = createDiv().id("previewBox").parent(previewSlot);
   previewBox.attribute("role", "button");
   previewBox.attribute("tabindex", "0");
-  previewBox.attribute("aria-label", "Subir autorretrato");
-  previewBox.elt.addEventListener("click", () => fileInputEl.elt.click());
+  previewBox.attribute("aria-label", "Agregar autorretrato");
+  // Sin foto: tocarlo sube una. Con foto: la abre en grande para editar la silueta
+  const onPreviewTap = () => (photoReady ? openMaskEditor() : pickPhoto());
+  previewBox.elt.addEventListener("click", onPreviewTap);
   previewBox.elt.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInputEl.elt.click(); }
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onPreviewTap(); }
   });
   previewCanvasEl = document.createElement("canvas");
   previewBox.elt.appendChild(previewCanvasEl);
-  createDiv("Subir autorretrato").id("uploadLabel").parent(previewBox);
+  // Ícono de retrato (cabeza, cuello y hombros) mientras no hay foto
+  createDiv(`<svg viewBox="0 0 64 64" aria-hidden="true">
+      <circle cx="32" cy="19" r="10"/>
+      <path d="M27.5 28v6.5c-9 1.5-15.5 9-15.5 21.5"/>
+      <path d="M36.5 28v6.5c9 1.5 15.5 9 15.5 21.5"/>
+    </svg>`).id("uploadLabel").parent(previewBox);
   ["tl", "tr", "bl", "br"].forEach((pos) => {
     createDiv().addClass("corner corner-" + pos).parent(previewBox);
   });
 
-  // Sección 3: poema + color de la letra
-  const colPoem = createDiv().id("colPoem").addClass("col").parent(panel);
+  // La foto se agrega tocando el recuadro; para cambiarla, está el botón bajo la foto en grande
 
+  // Sección 3: poema + color de la letra
+  const colPoem = createDiv().id("colPoem").addClass("col step-card").parent(panel);
+
+  createDiv("Poema plasmado").addClass("field-label").parent(colPoem);
+
+  // Los renglones van dentro de un cuadro hueso con esquinas, como los otros
+  const poemBox = createDiv().id("poemBox").parent(colPoem);
   poemTextarea = createElement("textarea", "");
   poemTextarea.id("poemInput");
   poemTextarea.attribute("rows", "4");
   poemTextarea.attribute("placeholder", "Escribe aquí tu poema"); // se borra solo al empezar a escribir
-  poemTextarea.parent(colPoem);
-  poemTextarea.input(() => schedulePoemRender());
-
-  // Letra blanca o negra, debajo de los renglones
-  const colorRow = createDiv().addClass("btn-row").parent(colPoem);
-
-  textColorWhiteBtn = createButton("Letra blanca");
-  textColorWhiteBtn.addClass("toggle-btn");
-  textColorWhiteBtn.parent(colorRow);
-  textColorWhiteBtn.mousePressed(() => setTextColor([255, 255, 255]));
-
-  textColorBlackBtn = createButton("Letra negra");
-  textColorBlackBtn.addClass("toggle-btn");
-  textColorBlackBtn.parent(colorRow);
-  textColorBlackBtn.mousePressed(() => setTextColor([0, 0, 0]));
-
-  updateColorButtonsUI();
+  poemTextarea.parent(poemBox);
+  poemTextarea.input(() => { schedulePoemRender(); updateStepUI(); });
+  poemTextarea.elt.addEventListener("focus", updateStepUI);
+  poemTextarea.elt.addEventListener("blur", updateStepUI);
+  ["tl", "tr", "bl", "br"].forEach((pos) => {
+    createDiv().addClass("corner corner-" + pos).parent(poemBox);
+  });
+  // "Letra blanca / Letra negra" ya no van aquí: están bajo la foto en grande
+  // Tocar el cuadro del poema vuelve a mostrar cómo se escribe, en grande
+  poemBox.elt.addEventListener("click", replayPoemAnimation);
 
   // Sección 4: resultado final (se genera solo) + guardar
-  const colResult = createDiv().id("colResult").addClass("col").parent(panel);
+  const colResult = createDiv().id("colResult").addClass("col step-card").parent(panel);
+
+  createDiv("Retrato plasmado de poesía").addClass("field-label").parent(colResult);
 
   // Zona donde se muestra el resultado final
   const stage = createDiv().id("stage").parent(colResult);
   const canvasFrame = createDiv().id("canvasFrame").parent(stage);
   canvasFrameEl = canvasFrame;
+  // Tocar el resultado lo muestra en grande (como las postales)
+  canvasFrame.attribute("role", "button");
+  canvasFrame.attribute("tabindex", "0");
+  canvasFrame.attribute("aria-label", "Ver resultado en grande");
+  canvasFrame.elt.addEventListener("click", openResultViewer);
+  canvasFrame.elt.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openResultViewer(); }
+  });
 
   cnv = createCanvas(480, 320); // provisional, con forma de postal; se ajusta al subir la foto
   cnv.parent(canvasFrame);
@@ -769,25 +991,14 @@ function buildInterface() {
     createDiv().addClass("corner corner-" + pos).parent(canvasFrame);
   });
 
-  // Guardar resultado y enviarlo por correo, uno al lado del otro
-  const resultRow = createDiv().addClass("btn-row").parent(colResult);
-
-  saveBtnEl = createButton("Guardar imagen");
-  saveBtnEl.addClass("primary-btn");
-  saveBtnEl.parent(resultRow);
-  saveBtnEl.elt.disabled = true;
-  saveBtnEl.mousePressed(onSaveClick);
-
-  shareBtnEl = createButton("Enviar mi postal");
-  shareBtnEl.addClass("primary-btn");
-  shareBtnEl.parent(resultRow);
-  shareBtnEl.elt.disabled = true;
-  shareBtnEl.mousePressed(openShareDialog);
+  // "Guardar imagen" y "Enviar mi postal" ya no van aquí: aparecen bajo la
+  // foto en grande cuando el poema terminó de escribirse (ver makeFinalRow)
 
   // Lado derecho: las postales (se crean y mueven en buildPostcards)
   createDiv().id("below").parent(appDiv);
 
   layoutBoxes(); // ahora que todo está armado, se puede medir
+  updateStepUI();
 }
 
 // ---------------------------------------------------------------------
@@ -807,6 +1018,7 @@ function handleFileSelected(file) {
     photoReady = true;
     maskReady = false;
     maskImg = null;
+    closeResultViewer();
     photoId++;
     appState = "vacio"; // ya hay foto, falta generar el retrato
     renderId++;         // descarta cualquier dibujo de la foto anterior
@@ -815,8 +1027,16 @@ function handleFileSelected(file) {
     refreshSaveButton();
     redraw();
     drawPreview();
+    openMaskEditor(); // la foto se abre en grande mientras se traza la silueta
     if (modelReady) detectPerson();
   });
+}
+
+// Abre la ventana para elegir foto (se limpia antes, para poder elegir
+// la misma foto otra vez si se quiere)
+function pickPhoto() {
+  fileInputEl.elt.value = "";
+  fileInputEl.elt.click();
 }
 
 // Detecta a la persona en la foto actual y arma la máscara. Se hace
@@ -834,29 +1054,26 @@ function detectPerson() {
     buildMask(result, () => {
       if (myPhotoId !== photoId) return;
       maskReady = true;
-      drawPreview();
+        drawPreview();
+      if (maskEditorOpen && editorPhase === "edit") { updateMaskEditorUI(); sizeMaskEditor(); }
       renderPoem(); // si ya había poema, se plasma de inmediato
     });
   });
 }
 
-// Dibuja la foto dentro del recuadro de vista previa (sin deformarla) y,
-// si ya se detectó, marca en gris oscuro la zona considerada retrato.
-function drawPreview() {
-  if (!previewCanvasEl) return;
-
-  const boxW = previewCanvasEl.clientWidth;
-  const boxH = previewCanvasEl.clientHeight;
+// Dibuja la foto en un canvas (sin deformarla) y, si ya se detectó, marca
+// en turquesa la zona considerada retrato. Devuelve dónde quedó la foto.
+function drawPhotoWithMask(canvasEl) {
+  const boxW = canvasEl.clientWidth;
+  const boxH = canvasEl.clientHeight;
   const dpr = window.devicePixelRatio || 1;
-  previewCanvasEl.width = Math.round(boxW * dpr);
-  previewCanvasEl.height = Math.round(boxH * dpr);
+  canvasEl.width = Math.round(boxW * dpr);
+  canvasEl.height = Math.round(boxH * dpr);
 
-  const ctx = previewCanvasEl.getContext("2d");
+  const ctx = canvasEl.getContext("2d");
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, boxW, boxH);
-  // Con foto, se esconde el texto "Subir autorretrato" (tocar de nuevo la cambia)
-  previewCanvasEl.parentElement.classList.toggle("has-photo", photoReady);
-  if (!photoReady) return;
+  if (!photoReady) return null;
 
   const imgW = originalImg.width;
   const imgH = originalImg.height;
@@ -883,13 +1100,900 @@ function drawPreview() {
     ctx.drawImage(tint, x, y, drawW, drawH);
     ctx.globalAlpha = 1;
   }
+  return { x, y, scale };
+}
+
+// Vista previa del panel izquierdo
+function drawPreview() {
+  if (!previewCanvasEl) return;
+  // Con foto, se esconde el texto del recuadro y el botón pasa a "Cambiar autorretrato"
+  previewCanvasEl.parentElement.classList.toggle("has-photo", photoReady);
+  previewCanvasEl.parentElement.setAttribute("aria-label", photoReady ? "Editar silueta" : "Agregar autorretrato");
+  drawPhotoWithMask(previewCanvasEl);
+}
+
+// ---------------------------------------------------------------------
+// EDITOR DE SILUETA (la foto en grande, como las postales)
+// 1) Apenas se agrega una foto se abre aquí y se traza la silueta.
+// 2) Se puede pintar (agrega zona turquesa, donde irá el poema) o
+//    borrar (la quita). Se dibuja directo sobre la máscara.
+// 3) Con "Listo" se ve cómo salen las líneas de la grilla, de izquierda
+//    a derecha, y luego cómo se escribe el poema sobre ellas.
+// ---------------------------------------------------------------------
+const BRUSH_SIZE = 28;          // diámetro del pincel en pantalla (px)
+const GRID_ANIM_MS = 1600;      // cuánto tarda en trazarse la grilla
+const POEM_ANIM_MS = 2600;      // cuánto tarda en escribirse el poema
+let editorPhase = "edit";       // "edit" (pintar/borrar), "anim" (animación) o "done" (terminado)
+let editorAnimId = 0;           // cambia al cerrar, para cortar animaciones viejas
+let maskEditorDoneBtn, maskEditorHintEl, maskEditorToolsEl, maskEditorFinalEl;
+
+function setBrushMode(mode) {
+  brushMode = mode;
+  if (!maskEditorPaintBtn) return;
+  maskEditorPaintBtn.classList.toggle("toggle-btn-active", mode === "paint");
+  maskEditorEraseBtn.classList.toggle("toggle-btn-active", mode === "erase");
+}
+
+// Arma la ventana del editor (una sola vez), encima de las postales
+function buildMaskEditor() {
+  maskEditorEl = document.createElement("div");
+  maskEditorEl.id = "maskEditor";
+  // La foto es el frente de una postal; en la etapa 3 gira y muestra el reverso
+  maskEditorEl.innerHTML = `
+    <div class="complete-prompt">Completa tus datos para terminar tu postal y guardar tus resultados</div>
+    <div class="stamp-offer">
+      <div class="stamp-offer-title">¿Quieres que tu postal sea parte de esta web?</div>
+      <div class="stamp-offer-row">
+        <div class="stamp-offer-sub">Arrastra esta estampilla a la postal</div>
+        <div class="stamp" id="dragStamp" title="Arrástrala al recuadro de la estampilla">${STAMP_HTML}</div>
+      </div>
+    </div>
+    <div class="postcard-large editor-card">
+      <div class="postcard-inner">
+        <div class="editor-front"><canvas id="maskEditorCanvas"></canvas></div>
+        <div class="postcard-face postcard-back" id="editorBack"></div>
+      </div>
+    </div>
+    <div class="btn-row mask-editor-tools">
+      <button class="toggle-btn" id="maskChange">Cambiar autorretrato</button>
+      <button class="toggle-btn" id="maskPaint">Pintar</button>
+      <button class="toggle-btn" id="maskErase">Borrar</button>
+      <button class="primary-btn" id="maskDone">Listo</button>
+    </div>
+    <div class="mask-editor-hint"></div>
+    <div class="envelope env-layer-back" aria-hidden="true">
+      <div class="env-back"></div>
+      <div class="env-flap flap-back"></div>
+    </div>
+    <div class="envelope env-layer-front" aria-hidden="true">
+      <div class="env-front"></div>
+      <div class="env-flap flap-front"></div>
+    </div>
+    <div class="sent-message">
+      <p class="sent-title">Tu postal está en el sobre</p>
+      <p>Tienes que enviar ambas fotos, la <strong>portada</strong> y la <strong>contraportada</strong>, a este correo:</p>
+      <p class="share-email">${SHARE_EMAIL}</p>
+      <button class="primary-btn sent-copy">Copiar correo</button>
+      <p class="share-note">Ya se descargaron en tu computador. Esta postal podrá ser utilizada para la construcción de este sitio web.</p>
+    </div>`;
+  document.getElementById("below").appendChild(maskEditorEl);
+
+  maskEditorCanvasEl = maskEditorEl.querySelector("#maskEditorCanvas");
+  editorCardEl = maskEditorEl.querySelector(".editor-card");
+  editorBackEls = buildEditorBack(maskEditorEl.querySelector("#editorBack"));
+  // "Copiar correo" del mensaje final
+  const sentCopy = maskEditorEl.querySelector(".sent-copy");
+  sentCopy.addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(SHARE_EMAIL); sentCopy.textContent = "¡Copiado!"; }
+    catch (err) { sentCopy.textContent = "No se pudo copiar"; }
+    setTimeout(() => { sentCopy.textContent = "Copiar correo"; }, 2000);
+  });
+  setupStampDrag(maskEditorEl.querySelector("#dragStamp"));
+  maskEditorPaintBtn = maskEditorEl.querySelector("#maskPaint");
+  maskEditorEraseBtn = maskEditorEl.querySelector("#maskErase");
+  maskEditorEl.querySelector("#maskChange").addEventListener("click", () => pickPhoto());
+  maskEditorDoneBtn = maskEditorEl.querySelector("#maskDone");
+  maskEditorHintEl = maskEditorEl.querySelector(".mask-editor-hint");
+  maskEditorToolsEl = maskEditorEl.querySelector(".mask-editor-tools");
+  maskEditorFinalEl = makeFinalRow(maskEditorEl, () => {
+    maskEditorHintEl.textContent = editorHint();
+    updateStepUI();
+    fillEditorBack();
+    editorCardEl.classList.add("flipped"); // etapa 3: la postal se da vuelta para escribir los datos
+    updateEditorDataUI();
+  });
+  maskEditorEl.insertBefore(maskEditorFinalEl, maskEditorHintEl); // bajo la foto, antes del texto de ayuda
+  maskEditorPaintBtn.addEventListener("click", () => setBrushMode("paint"));
+  maskEditorEraseBtn.addEventListener("click", () => setBrushMode("erase"));
+  maskEditorDoneBtn.addEventListener("click", startPoemAnimation);
+  // Tocar fuera de la foto o apretar Esc cierra (y al terminar, tocar en cualquier parte)
+  maskEditorEl.addEventListener("click", (e) => {
+    if (e.target.closest("button")) return; // los botones no cierran
+    if (stampJustDragged) { stampJustDragged = false; return; } // soltar la estampilla no cierra
+    if (maskEditorEl.classList.contains("sending")) {
+      // mientras se ensobra no se cierra; ya enviada, solo tocar fuera del mensaje cierra
+      if (maskEditorEl.classList.contains("sent") && !e.target.closest(".sent-message")) closeMaskEditor();
+      return;
+    }
+    if (e.target.closest(".stamp-offer")) return;
+    // En la etapa 3, tocar la postal la da vuelta (tocar fuera la cierra);
+    // escribir en los datos no la da vuelta
+    if (isEditorStep3() && e.target.closest(".editor-card")) {
+      if (e.target.closest("input, label, .pc-stamp")) return;
+      editorCardEl.classList.toggle("flipped");
+      return;
+    }
+    if (e.target === maskEditorEl || editorPhase === "done") closeMaskEditor();
+  });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && maskEditorOpen) closeMaskEditor(); });
+  setupMaskBrush();
+}
+
+// Botones y texto de ayuda según la etapa
+function updateMaskEditorUI() {
+  updateStepUI();
+  if (!maskEditorEl) return;
+  const editing = editorPhase === "edit";
+  maskEditorToolsEl.style.visibility = editing ? "visible" : "hidden";
+  const canEdit = editing && maskReady && !!maskImg;
+  maskEditorPaintBtn.disabled = !canEdit;
+  maskEditorEraseBtn.disabled = !canEdit;
+  maskEditorDoneBtn.disabled = !canEdit;
+  maskEditorCanvasEl.classList.toggle("can-paint", canEdit);
+  if (editing) {
+    maskEditorHintEl.textContent = canEdit
+      ? "Lo turquesa es tu silueta: ahí se escribirá el poema. Pinta o borra para ajustarla."
+      : "Trazando tu silueta…";
+  }
+}
+
+// Se abre apenas se agrega la foto (y también al tocar la foto del panel)
+function openMaskEditor() {
+  if (!photoReady) return;
+  if (!maskEditorEl) buildMaskEditor();
+  editorAnimId++;
+  editorPhase = "edit";
+  maskEditorOpen = true;
+  setBrushMode("paint");
+  maskEditorEl.classList.add("open");
+  maskEditorEl.classList.remove("done");
+  maskEditorFinalEl.classList.remove("confirmed"); // se vuelve a elegir la letra
+  editorCardEl.classList.remove("flipped");        // siempre parte mostrando la foto
+  resetEnvelope();
+  updateEditorDataUI();
+  updateMaskEditorUI();
+  sizeMaskEditor();
+}
+
+function closeMaskEditor() {
+  if (!maskEditorOpen) return;
+  editorAnimId++; // corta la animación si estaba en curso
+  maskEditorOpen = false;
+  maskEditorEl.classList.remove("open");
+  updateStepUI();
+  drawPreview();
+}
+
+// La foto ocupa lo más posible del lado derecho, sin deformarse
+function sizeMaskEditor() {
+  if (!maskEditorOpen || !photoReady) return;
+  const below = document.getElementById("below");
+  const maxW = below.clientWidth * 0.7;
+  const maxH = below.clientHeight * 0.62;
+  const ratio = originalImg.width / originalImg.height;
+  const w = Math.floor(Math.min(maxW, maxH * ratio));
+  const h = Math.floor(w / ratio);
+  maskEditorCanvasEl.style.width = w + "px";
+  maskEditorCanvasEl.style.height = h + "px";
+  // Las letras del reverso escalan como en una postal 3:2 de este ancho
+  editorCardEl.style.setProperty("--h", Math.min(h, w / POSTCARD_RATIO) + "px");
+  if (editorPhase === "edit") {
+    maskEditorFit = drawPhotoWithMask(maskEditorCanvasEl);
+  } else {
+    drawEditorFrame(lastAnimState.grid, lastAnimState.poem); // redibuja la animación al nuevo tamaño
+  }
+}
+
+// ---- Animación: grilla y poema ----
+
+// Los tramos de cuerpo de cada fila (los mismos que usa el poema)
+function computeGridSegments() {
+  maskImg.loadPixels();
+  const w = maskImg.width;
+  const h = maskImg.height;
+  const scale = Math.max(w, h) / CONFIG.referenceSize;
+  const lineSpacing = CONFIG.lineSpacing * scale;
+  const out = [];
+  for (let y = lineSpacing; y < h; y += lineSpacing) {
+    const yy = Math.floor(y);
+    const segs = scanRowSegments(maskImg, yy, CONFIG.cellCoverageThreshold,
+      CONFIG.minSegmentWidth * scale, CONFIG.maxRowGap * scale);
+    for (const [x0, x1] of segs) out.push({ y: yy, x0, x1 });
+  }
+  return out;
+}
+
+let animSegments = [];   // líneas de la grilla
+let animLines = [];      // líneas del poema (texto + posición)
+let lastAnimState = { grid: 0, poem: 0 };
+const easeOut = (t) => 1 - Math.pow(1 - t, 3);
+
+// Dibuja un cuadro de la animación. grid y poem van de 0 a 1.
+// Cada fila empieza un poquito después que la de arriba.
+function drawEditorFrame(grid, poem) {
+  lastAnimState = { grid, poem };
+  const canvasEl = maskEditorCanvasEl;
+  const boxW = canvasEl.clientWidth;
+  const boxH = canvasEl.clientHeight;
+  const dpr = window.devicePixelRatio || 1;
+  if (canvasEl.width !== Math.round(boxW * dpr)) canvasEl.width = Math.round(boxW * dpr);
+  if (canvasEl.height !== Math.round(boxH * dpr)) canvasEl.height = Math.round(boxH * dpr);
+  const ctx = canvasEl.getContext("2d");
+  const s = Math.min(boxW / originalImg.width, boxH / originalImg.height);
+  const ox = (boxW - originalImg.width * s) / 2;
+  const oy = (boxH - originalImg.height * s) / 2;
+
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, boxW, boxH);
+  // A partir de aquí se dibuja en coordenadas de la foto
+  ctx.setTransform(dpr * s, 0, 0, dpr * s, dpr * ox, dpr * oy);
+  ctx.drawImage(originalImg.canvas, 0, 0);
+
+  const H = originalImg.height;
+  const stagger = 0.5; // qué parte del tiempo se reparte entre filas
+  const rowProgress = (t, y) => {
+    const start = (y / H) * stagger;
+    return easeOut(Math.max(0, Math.min(1, (t - start) / (1 - stagger))));
+  };
+
+  // Grilla: líneas blancas que crecen de izquierda a derecha. Cuando se
+  // escribe el poema, cada línea se va borrando justo donde aparece el
+  // texto, hasta desaparecer. Las que no llevan texto se desvanecen.
+  const fontSizeImg = CONFIG.fontSize * Math.max(originalImg.width, H) / CONFIG.referenceSize;
+  const writtenRows = new Set(animLines.map((l) => l.y + ":" + l.x0));
+  ctx.lineWidth = Math.max(1, 1.5 / s);
+  ctx.lineCap = "round";
+  for (const seg of animSegments) {
+    const g = rowProgress(grid, seg.y);
+    if (g <= 0) continue;
+    let from = seg.x0;
+    let alpha = 0.9;
+    if (poem > 0) {
+      const p = rowProgress(poem, seg.y);
+      if (writtenRows.has(seg.y + ":" + seg.x0)) {
+        // mismo borde que usa el texto al aparecer
+        from = seg.x0 - fontSizeImg + (seg.x1 - seg.x0 + 2 * fontSizeImg) * p;
+      } else {
+        alpha = 0.9 * (1 - p);
+      }
+    }
+    const to = seg.x0 + (seg.x1 - seg.x0) * g;
+    if (to <= from || alpha <= 0) continue;
+    ctx.strokeStyle = "rgba(255, 255, 255, " + alpha + ")";
+    ctx.beginPath();
+    ctx.moveTo(Math.max(from, seg.x0), seg.y);
+    ctx.lineTo(to, seg.y);
+    ctx.stroke();
+  }
+
+  // Poema: cada línea se va escribiendo de izquierda a derecha
+  if (poem > 0 && animLines.length) {
+    const scale = Math.max(originalImg.width, H) / CONFIG.referenceSize;
+    const fontSize = CONFIG.fontSize * scale;
+    ctx.font = "bold " + fontSize + "px " + CONFIG.fontFamily;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    const white = CONFIG.textColor.every((c) => c === 255);
+    const shadow = white ? SHADOW_COLOR.blanca : SHADOW_COLOR.negra;
+    const [r, g, b] = CONFIG.textColor;
+    for (const line of animLines) {
+      const p = rowProgress(poem, line.y);
+      if (p <= 0) continue;
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(line.x0 - fontSize, line.y - fontSize, (line.x1 - line.x0 + 2 * fontSize) * p, fontSize * 2);
+      ctx.clip();
+      if (CONFIG.textOutline) {
+        ctx.fillStyle = "rgba(" + shadow.join(",") + "," + (160 / 255) + ")";
+        ctx.fillText(line.text, line.cx + 1, line.y + 1);
+      }
+      ctx.fillStyle = "rgba(" + r + "," + g + "," + b + "," + (CONFIG.textAlpha / 255) + ")";
+      ctx.fillText(line.text, line.cx, line.y);
+      ctx.restore();
+    }
+  }
+}
+
+// Anima un valor de 0 a 1 en "ms" milisegundos, llamando a onFrame en cada cuadro
+function animateValue(ms, myId, onFrame, onDone) {
+  const t0 = performance.now();
+  function step(now) {
+    if (myId !== editorAnimId) return; // se cerró o empezó otra
+    const t = Math.min(1, (now - t0) / ms);
+    onFrame(t);
+    if (t < 1) requestAnimationFrame(step);
+    else onDone();
+  }
+  requestAnimationFrame(step);
+}
+
+// "Listo": se trazan las líneas y luego se escribe el poema
+function startPoemAnimation() {
+  if (!maskReady || !maskImg || editorPhase !== "edit") return;
+  const myId = ++editorAnimId;
+  editorPhase = "anim";
+  updateMaskEditorUI();
+  maskEditorHintEl.textContent = "Trazando las líneas…";
+  animSegments = computeGridSegments();
+  animLines = [];
+  renderPoem(); // arma el poema con la silueta final (mientras se trazan las líneas)
+
+  animateValue(GRID_ANIM_MS, myId, (t) => drawEditorFrame(t, 0), () => {
+    const hasPoem = poemTextarea.value().trim().length > 0;
+    if (!hasPoem) {
+      finishAnimation("Escribe tu poema en el panel y aparecerá sobre estas líneas. Toca para cerrar.");
+      return;
+    }
+    // Espera a que el poema esté armado (suele estar listo antes que la grilla)
+    const waitPoem = () => {
+      if (myId !== editorAnimId) return;
+      if (appState !== "listo") { setTimeout(waitPoem, 60); return; }
+      animLines = lastPoemLines;
+      maskEditorHintEl.textContent = "Escribiendo tu poema…";
+      animateValue(POEM_ANIM_MS, myId, (t) => drawEditorFrame(1, t), () => {
+        finishAnimation(editorHint());
+      });
+    };
+    waitPoem();
+  });
+}
+
+// Fila con "Guardar imagen" y "Enviar mi postal". Se muestra solo cuando
+// el retrato con poema está listo.
+// Primero se elige "Letra blanca / Letra negra" y se toca "Listo"; recién
+// entonces aparecen "Guardar imagen" y "Enviar mi postal".
+function makeFinalRow(parent, onConfirm) {
+  const block = document.createElement("div");
+  block.className = "final-block";
+  block.innerHTML = `
+    <div class="btn-row color-row">
+      <button class="toggle-btn final-white">Letra blanca</button>
+      <button class="toggle-btn final-black">Letra negra</button>
+      <button class="primary-btn final-confirm">Listo</button>
+    </div>
+    <div class="btn-row final-row">
+      <button class="primary-btn final-save">Guardar portada</button>
+      <button class="primary-btn final-back">Guardar contraportada</button>
+    </div>`;
+  const white = block.querySelector(".final-white");
+  const black = block.querySelector(".final-black");
+  white.addEventListener("click", () => setTextColor([255, 255, 255]));
+  black.addEventListener("click", () => setTextColor([0, 0, 0]));
+  colorButtonPairs.push([white, black]);
+  updateColorButtonsUI();
+  block.querySelector(".final-confirm").addEventListener("click", () => {
+    block.classList.add("confirmed");
+    if (onConfirm) onConfirm();
+  });
+  block.querySelector(".final-save").addEventListener("click", savePortada);
+  block.querySelector(".final-back").addEventListener("click", saveContraportada);
+  parent.appendChild(block);
+  const row = block.querySelector(".final-row");
+  finalRows.push(row);
+  row.classList.toggle("ready", appState === "listo");
+  return block;
+}
+
+// Si la foto está abierta en grande (ya terminada la animación), lo que se
+// escribe en los renglones aparece ahí al tiro, sin volver a animar
+// Texto de ayuda bajo la foto, cuando ya terminó la animación
+function editorHint() {
+  if (!lastPoemLines.length) return "Escribe tu poema en el panel y aparecerá sobre estas líneas. Toca para cerrar.";
+  if (!maskEditorFinalEl.classList.contains("confirmed")) return "Elige letra blanca o negra y toca Listo.";
+  if (!editorDataComplete()) return ""; // arriba dice "Completa tus datos…"
+  return "Toca la postal para darla vuelta. Toca fuera para cerrar.";
+}
+
+// ---- Etapa 3: la postal se da vuelta y se escriben los datos ----
+let editorCardEl, editorBackEls;
+let stampJustDragged = false;
+
+function isEditorStep3() {
+  return maskEditorOpen && editorPhase === "done" &&
+    maskEditorFinalEl && maskEditorFinalEl.classList.contains("confirmed");
+}
+
+// Estampilla: marco perforado blanco, centro terracota con un retrato
+const STAMP_HTML = `<div class="stamp-inner">
+    <svg viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="19" r="10"/>
+      <path d="M27.5 28v6.5c-9 1.5-15.5 9-15.5 21.5"/><path d="M36.5 28v6.5c9 1.5 15.5 9 15.5 21.5"/></svg>
+    <span>cada espacio de mí es un poema</span>
+  </div>`;
+
+// Estación según la fecha (hemisferio sur, como en Chile)
+function seasonFor(date) {
+  const m = date.getMonth() + 1, d = date.getDate();
+  const md = m * 100 + d;
+  if (md >= 1221 || md < 321) return "verano";
+  if (md < 621) return "otoño";
+  if (md < 923) return "invierno";
+  return "primavera";
+}
+
+// "2026-08-22" -> "Sábado 22 de agosto, invierno 2026"
+function formatPostcardDate(isoValue) {
+  if (!isoValue) return "";
+  const [y, m, d] = isoValue.split("-").map(Number);
+  const date = new Date(y, m - 1, d);
+  const weekday = date.toLocaleDateString("es-CL", { weekday: "long" });
+  const month = date.toLocaleDateString("es-CL", { month: "long" });
+  return weekday.charAt(0).toUpperCase() + weekday.slice(1) + " " + d + " de " + month + ", " + seasonFor(date) + " " + y;
+}
+
+// Reverso para escribir: a la izquierda el poema y "Poema por", a la
+// derecha "Escribe tus datos", la estampilla y De / Desde / Fecha
+function buildEditorBack(backEl) {
+  backEl.innerHTML = `
+    <div class="pc-message">
+      <div class="pc-poem"></div>
+      <label class="pc-author pc-author-row">Poema por:
+        <input class="pc-input" id="backAuthor" maxlength="60" placeholder="autora o autor del poema"></label>
+    </div>
+    <div class="pc-divider"></div>
+    <div class="pc-address">
+      <div class="pc-top">
+        <div class="pc-stamp" id="editorStampBox">Estampilla</div>
+      </div>
+      <label class="pc-line"><span class="pc-label">De</span>
+        <input class="pc-input" id="backName" maxlength="60" placeholder="tu nombre"></label>
+      <label class="pc-line"><span class="pc-label">Desde</span>
+        <input class="pc-input" id="backPlace" maxlength="60" placeholder="ciudad, país"></label>
+      <label class="pc-line pc-date-line"><span class="pc-label">Fecha</span>
+        <span class="pc-date-text" id="backDateText"></span>
+        <input class="pc-date-input" id="backDate" type="date" aria-label="Fecha"></label>
+    </div>`;
+  const els = {
+    poem: backEl.querySelector(".pc-poem"),
+    author: backEl.querySelector("#backAuthor"),
+    name: backEl.querySelector("#backName"),
+    place: backEl.querySelector("#backPlace"),
+    date: backEl.querySelector("#backDate"),
+    dateText: backEl.querySelector("#backDateText"),
+    stampBox: backEl.querySelector("#editorStampBox")
+  };
+  for (const input of [els.author, els.name, els.place, els.date]) {
+    input.addEventListener("input", updateEditorDataUI);
+    input.addEventListener("change", updateEditorDataUI);
+  }
+  // La fecha se ve escrita con palabras; tocar la línea abre el calendario
+  els.date.parentElement.addEventListener("click", (e) => {
+    e.preventDefault();
+    try { els.date.showPicker(); } catch (err) { els.date.focus(); }
+  });
+  return els;
+}
+
+// Los datos escritos atrás (la fecha ya con su estación)
+function postcardData() {
+  if (!editorBackEls) return { name: "", place: "", date: "", author: "", poem: poemTextarea.value().trim() };
+  return {
+    name: editorBackEls.name.value.trim(),
+    place: editorBackEls.place.value.trim(),
+    date: formatPostcardDate(editorBackEls.date.value),
+    author: editorBackEls.author.value.trim(),
+    poem: poemTextarea.value().trim()
+  };
+}
+
+function editorDataComplete() {
+  const d = postcardData();
+  return !!(d.name && d.place && d.date && d.author && d.poem);
+}
+
+// Al escribir: muestra la fecha con su estación y, con todo completo,
+// aparecen "Guardar portada / contraportada" y la estampilla arriba
+function updateEditorDataUI() {
+  if (!editorBackEls) return;
+  const dateText = formatPostcardDate(editorBackEls.date.value);
+  editorBackEls.dateText.textContent = dateText || "elige la fecha";
+  editorBackEls.dateText.classList.toggle("empty", !dateText);
+  maskEditorEl.classList.toggle("step3", isEditorStep3());
+  maskEditorEl.classList.toggle("data-ok", isEditorStep3() && editorDataComplete());
+  if (isEditorStep3()) maskEditorHintEl.textContent = editorHint();
+}
+
+// El poema del reverso es el que se escribió en el panel
+function fillEditorBack() {
+  if (!editorBackEls) return;
+  editorBackEls.poem.textContent = poemTextarea.value().trim();
+}
+
+// ---- Arrastrar la estampilla al recuadro de la postal ----
+function setupStampDrag(stampEl) {
+  let ghost = null;
+  const move = (e) => {
+    ghost.style.left = e.clientX + "px";
+    ghost.style.top = e.clientY + "px";
+    const r = editorBackEls.stampBox.getBoundingClientRect();
+    const over = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+    editorBackEls.stampBox.classList.toggle("drop-over", over);
+  };
+  stampEl.addEventListener("pointerdown", (e) => {
+    if (!maskEditorEl.classList.contains("data-ok")) return;
+    e.preventDefault();
+    editorCardEl.classList.add("flipped"); // el recuadro está en el reverso
+    try { stampEl.setPointerCapture(e.pointerId); } catch (err) { /* sin captura igual funciona */ }
+    ghost = stampEl.cloneNode(true);
+    ghost.removeAttribute("id");
+    ghost.classList.add("stamp-ghost");
+    document.body.appendChild(ghost);
+    stampEl.classList.add("dragging");
+    move(e);
+  });
+  stampEl.addEventListener("pointermove", (e) => { if (ghost) move(e); });
+  const end = (e) => {
+    if (!ghost) return;
+    const box = editorBackEls.stampBox;
+    const dropped = box.classList.contains("drop-over");
+    box.classList.remove("drop-over");
+    ghost.remove();
+    ghost = null;
+    stampEl.classList.remove("dragging");
+    stampJustDragged = true;
+    setTimeout(() => { stampJustDragged = false; }, 0);
+    if (dropped) {
+      box.innerHTML = '<div class="stamp">' + STAMP_HTML + "</div>";
+      box.classList.add("stamped");
+      maskEditorEl.classList.add("stamped");
+      setTimeout(playEnvelope, 500); // la postal entra a un sobre y se cierra
+    }
+  };
+  stampEl.addEventListener("pointerup", end);
+  stampEl.addEventListener("pointercancel", end);
+}
+
+// ---- El sobre: la postal se achica, sube el sobre, entra la postal,
+// se cierra y aparece el correo ----
+const CARD_SHRINK_MS = 700;      // primero la postal se achica en su lugar
+const ENVELOPE_RISE_MS = 800;    // luego sube el sobre desde abajo
+const CARD_IN_MS = 900;          // la postal baja y entra al sobre
+const FLAP_CLOSE_MS = 700;       // la solapa se cierra
+let envelopeTimers = [];
+
+function playEnvelope() {
+  if (!maskEditorOpen) return;
+  const envLayers = maskEditorEl.querySelectorAll(".envelope"); // detrás y delante de la postal
+  const env = envLayers[0];
+  const card = editorCardEl;
+  const cardRect = card.getBoundingClientRect();
+  const boxRect = maskEditorEl.getBoundingClientRect();
+
+  // Tamaño del sobre: un poco más chico que la postal, abajo y al centro
+  const envW = Math.min(cardRect.width * 0.72, boxRect.width * 0.7);
+  const envH = envW * 0.62;
+  envLayers.forEach((layer) => {
+    layer.style.width = envW + "px";
+    layer.style.height = envH + "px";
+  });
+
+  // Desaparecen los botones y textos
+  maskEditorEl.classList.add("sending");
+  const later = (fn, ms) => envelopeTimers.push(setTimeout(fn, ms));
+  const scale = Math.min((envW * 0.88) / cardRect.width, (envH * 0.86) / cardRect.height);
+  const ease = "cubic-bezier(.45,.05,.35,1)";
+
+  // 1) La postal se achica en su lugar, al tamaño que cabe en el sobre
+  requestAnimationFrame(() => {
+    card.style.transition = "transform " + CARD_SHRINK_MS + "ms " + ease;
+    card.style.transform = "scale(" + scale + ")";
+  });
+
+  // 2) Sube el sobre abierto
+  later(() => maskEditorEl.classList.add("env-up"), CARD_SHRINK_MS);
+
+  // 3) La postal (ya chica) baja y entra al sobre, detrás del bolsillo
+  later(() => {
+    const envRect = env.getBoundingClientRect();
+    const dx = (envRect.left + envRect.width / 2) - (cardRect.left + cardRect.width / 2);
+    const dy = (envRect.top + envRect.height * 0.55) - (cardRect.top + cardRect.height / 2);
+    card.style.transition = "transform " + CARD_IN_MS + "ms " + ease + ", opacity 0.2s 0.8s";
+    card.style.transform = "translate(" + dx + "px, " + dy + "px) scale(" + scale + ")";
+  }, CARD_SHRINK_MS + ENVELOPE_RISE_MS);
+
+  // 4) Se cierra la solapa
+  later(() => maskEditorEl.classList.add("env-closing"),
+    CARD_SHRINK_MS + ENVELOPE_RISE_MS + CARD_IN_MS);
+
+  // 5) Se descargan las dos fotos y aparece el mensaje con el correo
+  later(() => {
+    savePortada();
+    setTimeout(saveContraportada, 300);
+    maskEditorEl.classList.add("sent");
+  }, CARD_SHRINK_MS + ENVELOPE_RISE_MS + CARD_IN_MS + FLAP_CLOSE_MS + 200);
+}
+
+function resetEnvelope() {
+  envelopeTimers.forEach(clearTimeout);
+  envelopeTimers = [];
+  maskEditorEl.classList.remove("sending", "env-up", "env-closing", "sent", "stamped");
+  editorCardEl.style.transition = "";
+  editorCardEl.style.transform = "";
+  if (editorBackEls) {
+    editorBackEls.stampBox.classList.remove("stamped");
+    editorBackEls.stampBox.textContent = "Estampilla";
+  }
+}
+
+// ---- Guardar portada (foto + poema) y contraportada (reverso) ----
+function savePortada() {
+  if (appState !== "listo") return;
+  saveCanvas(cnv, "portada-" + Date.now(), "jpg");
+}
+
+// Dibuja el reverso como imagen, del mismo tamaño que la foto
+function drawBackCanvas() {
+  const W = originalImg.width, H = originalImg.height;
+  const c = document.createElement("canvas");
+  c.width = W; c.height = H;
+  const ctx = c.getContext("2d");
+  const hRef = Math.min(H, W / POSTCARD_RATIO);
+  const base = hRef * 0.045;
+  const pad = hRef * 0.08, gap = hRef * 0.06;
+  const font = (size, weight) => (weight || "400") + " " + size + "px -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
+  const d = postcardData();
+
+  ctx.fillStyle = "#F7F3EA";
+  ctx.fillRect(0, 0, W, H);
+
+  const colW = (W - 2 * pad - 2 * gap) / 2;
+  // Poema (respeta los saltos de línea y parte las líneas largas)
+  ctx.fillStyle = "#444444";
+  ctx.textBaseline = "top";
+  const poemSize = base * 0.85, lh = poemSize * 1.3;
+  ctx.font = font(poemSize);
+  let y = pad;
+  for (const para of d.poem.split("\n")) {
+    const words = para.split(" ");
+    let line = "";
+    if (!para.trim()) { y += lh; continue; }
+    for (const w of words) {
+      const test = line ? line + " " + w : w;
+      if (ctx.measureText(test).width > colW && line) { ctx.fillText(line, pad, y); y += lh; line = w; }
+      else line = test;
+    }
+    if (line) { ctx.fillText(line, pad, y); y += lh; }
+  }
+  // Poema por
+  ctx.fillStyle = "#888888";
+  ctx.font = font(base * 0.7);
+  ctx.textBaseline = "bottom";
+  ctx.fillText("Poema por: " + d.author, pad, H - pad);
+
+  // Línea al medio
+  const divX = pad + colW + gap;
+  ctx.fillStyle = "#CCCCCC";
+  ctx.fillRect(divX, pad, Math.max(1, hRef * 0.002), H - 2 * pad);
+
+  // Estampilla (arriba a la derecha)
+  const x1 = divX + gap, right = W - pad;
+  const sw = hRef * 0.22, sh = hRef * 0.26, sx = right - sw, sy = pad;
+  if (editorBackEls && editorBackEls.stampBox.classList.contains("stamped")) {
+    // Misma proporción estampilla/recuadro que en pantalla
+    const boxPx = editorBackEls.stampBox.getBoundingClientRect().width || 1;
+    const k = sw / boxPx;
+    const tw = 66 * k, th = 82 * k;
+    const tx = sx + (sw - tw) / 2, ty = sy + (sh - th) / 2;
+    ctx.fillStyle = "#FFFFFF"; ctx.fillRect(tx, ty, tw, th);
+    const m = 5 * k;
+    ctx.fillStyle = "#B5543A"; ctx.fillRect(tx + m, ty + m, tw - 2 * m, th - 2 * m);
+    ctx.strokeStyle = "#F3EDDC"; ctx.lineWidth = 2 * k; ctx.lineCap = "round";
+    const cx = tx + tw / 2, cy = ty + th * 0.3, r = tw * 0.09;
+    ctx.beginPath(); ctx.arc(cx, cy - r * 0.6, r, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(cx, cy + r * 2.4, r * 2, Math.PI, 0); ctx.stroke();
+    ctx.fillStyle = "#F3EDDC"; ctx.font = font(7 * k, "600");
+    ctx.textAlign = "center"; ctx.textBaseline = "alphabetic";
+    ["cada espacio", "de mí es", "un poema"].forEach((t, i) => ctx.fillText(t, cx, ty + th * 0.66 + i * 8 * k));
+    ctx.textAlign = "left";
+  } else {
+    ctx.strokeStyle = "#AAAAAA"; ctx.lineWidth = Math.max(1, hRef * 0.003);
+    ctx.setLineDash([hRef * 0.012, hRef * 0.008]);
+    ctx.strokeRect(sx, sy, sw, sh);
+    ctx.setLineDash([]);
+  }
+
+  // De / Desde / Fecha (abajo, con su línea)
+  const aSize = base * 0.7, labelSize = aSize * 0.7;
+  const rows = [["DE", d.name], ["DESDE", d.place], ["FECHA", d.date]];
+  const rowH = aSize * 1.9;
+  let ry = H - pad - rowH * rows.length;
+  ctx.textBaseline = "alphabetic";
+  for (const [label, value] of rows) {
+    const baseY = ry + rowH - aSize * 0.45;
+    ctx.fillStyle = "#888888"; ctx.font = font(labelSize, "600");
+    ctx.fillText(label, x1, baseY);
+    const lw = ctx.measureText(label).width;
+    ctx.fillStyle = "#444444"; ctx.font = font(aSize);
+    ctx.fillText(value, x1 + lw + aSize * 0.6, baseY);
+    ctx.fillStyle = "#CCCCCC";
+    ctx.fillRect(x1, ry + rowH, right - x1, Math.max(1, hRef * 0.002));
+    ry += rowH;
+  }
+  return c;
+}
+
+function saveContraportada() {
+  if (!photoReady) return;
+  const link = document.createElement("a");
+  link.download = "contraportada-" + Date.now() + ".jpg";
+  link.href = drawBackCanvas().toDataURL("image/jpeg", 0.92);
+  link.click();
+}
+
+function refreshLargeViews() {
+  if (maskEditorOpen && editorPhase === "done") {
+    animLines = lastPoemLines;
+    drawEditorFrame(1, animLines.length ? 1 : 0);
+    maskEditorHintEl.textContent = editorHint();
+    fillEditorBack();
+  }
+  if (resultViewerOpen) resultViewerImgEl.src = cnv.elt.toDataURL("image/jpeg", 0.92);
+}
+
+// Abre la foto en grande y vuelve a trazar las líneas y escribir el poema
+// (después pregunta de nuevo letra blanca o negra). Si ya está abierta,
+// no la interrumpe, para poder seguir escribiendo tranquila.
+function replayPoemAnimation() {
+  if (!photoReady || !maskReady || !maskImg) return;
+  if (maskEditorOpen) return;
+  closeResultViewer();
+  openMaskEditor();
+  startPoemAnimation();
+}
+
+function finishAnimation(hint) {
+  editorPhase = "done";
+  updateStepUI();
+  maskEditorHintEl.textContent = hint;
+  maskEditorEl.classList.add("done");
+}
+
+// ---------------------------------------------------------------------
+// VER EL RESULTADO EN GRANDE
+// Tocar el recuadro de abajo muestra la foto con el poema, en grande,
+// encima de las postales. Tocar de nuevo (o Esc) la cierra.
+// ---------------------------------------------------------------------
+let resultViewerEl, resultViewerImgEl;
+let resultViewerOpen = false;
+
+function openResultViewer() {
+  if (!photoReady) return;
+  if (!resultViewerEl) {
+    resultViewerEl = document.createElement("div");
+    resultViewerEl.id = "resultViewer";
+    resultViewerImgEl = document.createElement("img");
+    resultViewerImgEl.alt = "Tu retrato con el poema";
+    const hint = document.createElement("div");
+    hint.className = "mask-editor-hint";
+    hint.textContent = "Toca para cerrar";
+    resultViewerEl.append(resultViewerImgEl);
+    // Aquí solo se guarda (la letra y el envío están en la vista del poema)
+    const saveRow = document.createElement("div");
+    saveRow.className = "btn-row final-row save-only";
+    saveRow.innerHTML = `<button class="primary-btn">Guardar imagen</button>`;
+    saveRow.querySelector("button").addEventListener("click", onSaveClick);
+    finalRows.push(saveRow);
+    saveRow.classList.toggle("ready", appState === "listo");
+    resultViewerEl.append(saveRow, hint);
+    document.getElementById("below").appendChild(resultViewerEl);
+    resultViewerEl.addEventListener("click", (e) => { if (!e.target.closest("button")) closeResultViewer(); });
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape" && resultViewerOpen) closeResultViewer(); });
+  }
+  resultViewerImgEl.src = cnv.elt.toDataURL("image/jpeg", 0.92); // lo que se ve ahora en el resultado
+  resultViewerOpen = true;
+  resultViewerEl.classList.add("open");
+}
+
+function closeResultViewer() {
+  if (!resultViewerOpen) return;
+  resultViewerOpen = false;
+  resultViewerEl.classList.remove("open");
+}
+
+// Pinta o borra un trazo entre dos puntos (en coordenadas del editor)
+function brushStroke(from, to) {
+  if (!maskImg || !maskEditorFit) return;
+  const fit = maskEditorFit;
+  const toImg = (p) => ({ x: (p.x - fit.x) / fit.scale, y: (p.y - fit.y) / fit.scale });
+  const a = toImg(from);
+  const b = toImg(to);
+  const size = BRUSH_SIZE / fit.scale;
+  const ctx = maskImg.canvas.getContext("2d");
+  ctx.save();
+  ctx.globalCompositeOperation = brushMode === "erase" ? "destination-out" : "source-over";
+  ctx.strokeStyle = "#FFFFFF";
+  ctx.fillStyle = "#FFFFFF";
+  ctx.lineWidth = size;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(b.x, b.y);
+  ctx.stroke();
+  // Un círculo en la punta: así un solo toque (sin arrastrar) también marca
+  ctx.beginPath();
+  ctx.arc(b.x, b.y, size / 2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+  if (maskImg.setModified) maskImg.setModified(true);
+}
+
+function setupMaskBrush() {
+  const canvasEl = maskEditorCanvasEl;
+  let last = null;
+  let frameQueued = false;
+  const pointAt = (e) => {
+    const r = canvasEl.getBoundingClientRect();
+    return { x: e.clientX - r.left, y: e.clientY - r.top };
+  };
+  const refresh = () => {
+    if (frameQueued) return;
+    frameQueued = true;
+    requestAnimationFrame(() => { frameQueued = false; maskEditorFit = drawPhotoWithMask(canvasEl); });
+  };
+
+  canvasEl.addEventListener("pointerdown", (e) => {
+    if (!maskEditorOpen || editorPhase !== "edit" || !maskReady) return;
+    e.preventDefault();
+    canvasEl.setPointerCapture(e.pointerId);
+    last = pointAt(e);
+    brushStroke(last, last);
+    refresh();
+  });
+  canvasEl.addEventListener("pointermove", (e) => {
+    if (!last) return;
+    const p = pointAt(e);
+    brushStroke(last, p);
+    last = p;
+    refresh();
+  });
+  const end = () => {
+    if (!last) return;
+    last = null;
+    schedulePoemRender(); // el poema se vuelve a acomodar con la silueta nueva
+  };
+  canvasEl.addEventListener("pointerup", end);
+  canvasEl.addEventListener("pointercancel", end);
 }
 
 // Solo deja guardar cuando ya hay un retrato terminado
+// Colorea la sección de la etapa en que se está:
+// 0) ninguna: al entrar, sin foto todavía
+// 1) silueta: editando la silueta
+// 2) poema: falta escribirlo, o se está escribiendo
+// 3) retrato: el retrato con poema está listo
+function updateStepUI() {
+  const poemFocused = poemTextarea && document.activeElement === poemTextarea.elt;
+  const hasPoem = poemTextarea && poemTextarea.value().trim().length > 0;
+  // En la foto grande: mientras salen las líneas, se escribe el poema y se
+  // elige la letra, sigue siendo "poema"; tras "Listo" pasa a "retrato"
+  const choosingLetter = maskEditorOpen && editorPhase === "done" &&
+    maskEditorFinalEl && !maskEditorFinalEl.classList.contains("confirmed");
+  let step;
+  if (!photoReady) step = 0;                      // al entrar, sin foto: ninguna marcada
+  else if (maskEditorOpen && editorPhase === "edit") step = 1;
+  else if ((maskEditorOpen && editorPhase === "anim") || choosingLetter) step = 2;
+  else if (maskEditorOpen && editorPhase === "done") step = 3;
+  else if (poemFocused || !hasPoem || appState !== "listo") step = 2;
+  else step = 3;
+  ["colPhoto", "colPoem", "colResult"].forEach((id, i) => {
+    const el = document.getElementById(id);
+    if (el) el.classList.toggle("active", i + 1 === step);
+  });
+}
+
 function refreshSaveButton() {
+  updateStepUI();
   const ready = appState === "listo";
-  if (saveBtnEl) saveBtnEl.elt.disabled = !ready;
-  if (shareBtnEl) shareBtnEl.elt.disabled = !ready;
+  for (const row of finalRows) row.classList.toggle("ready", ready);
 }
 
 // Achica la imagen solo si CONFIG.maxCanvasSize tiene un valor definido.
@@ -919,13 +2023,9 @@ function setTextColor(rgb) {
 function updateColorButtonsUI() {
   const isWhite = CONFIG.textColor[0] === 255 && CONFIG.textColor[1] === 255 && CONFIG.textColor[2] === 255;
 
-  if (textColorWhiteBtn) {
-    if (isWhite) textColorWhiteBtn.addClass("toggle-btn-active");
-    else textColorWhiteBtn.removeClass("toggle-btn-active");
-  }
-  if (textColorBlackBtn) {
-    if (!isWhite) textColorBlackBtn.addClass("toggle-btn-active");
-    else textColorBlackBtn.removeClass("toggle-btn-active");
+  for (const [white, black] of colorButtonPairs) {
+    white.classList.toggle("toggle-btn-active", isWhite);
+    black.classList.toggle("toggle-btn-active", !isWhite);
   }
 }
 
@@ -939,14 +2039,14 @@ function onSaveClick() {
 // ---------------------------------------------------------------------
 // ENVIAR LA POSTAL POR CORREO
 // Muestra una ventanita con el correo al que hay que enviar la postal:
-// la persona adjunta su imagen y escribe los datos que van atrás de la
-// postal (nombre, desde dónde, fecha y poema).
+// la persona solo adjunta la portada y la contraportada (sus datos ya
+// van escritos en la contraportada).
 // ---------------------------------------------------------------------
 const SHARE_EMAIL = "bernardita.jesus1@gmail.com";
 
 function openShareDialog() {
   if (appState !== "listo") return;
-  shareCopyEl.textContent = "Copiar correo y datos";
+  shareCopyEl.textContent = "Copiar correo";
   shareDialogEl.classList.add("open");
   shareCopyEl.focus();
 }
@@ -955,38 +2055,20 @@ function closeShareDialog() {
   shareDialogEl.classList.remove("open");
 }
 
-// Texto listo para pegar en el correo: a quién enviarlo y los datos que
-// van atrás de la postal. El poema y la fecha de hoy ya van puestos.
-function shareTemplate() {
-  const poem = poemTextarea.value().trim();
-  const today = new Date().toLocaleDateString("es-CL", { day: "numeric", month: "long", year: "numeric" });
-  return (
-    "Para: " + SHARE_EMAIL + "\n" +
-    "Asunto: Postal para la galería\n\n" +
-    "TUS DATOS\n" +
-    "Nombre: \n" +
-    "Fecha: " + today + "\n" +
-    "Desde dónde: \n\n" +
-    "DATOS DEL POEMA\n" +
-    "Poema:\n" + (poem || "") + "\n\n" +
-    "Autor o autora: \n\n" +
-    "(Recuerda adjuntar tu postal)"
-  );
-}
-
-// Copia el correo y todos los datos al portapapeles
+// Copia el correo al portapapeles
 async function copyShareData() {
   try {
-    await navigator.clipboard.writeText(shareTemplate());
+    await navigator.clipboard.writeText(SHARE_EMAIL);
     shareCopyEl.textContent = "¡Copiado!";
   } catch (err) {
     shareCopyEl.textContent = "No se pudo copiar";
   }
 }
 
-// Descarga la postal en JPG (pesa menos para adjuntarla al correo)
+// Descarga portada y contraportada en JPG (pesan menos para el correo)
 function downloadPostcardForEmail() {
-  saveCanvas(cnv, "mi-postal-" + Date.now(), "jpg");
+  savePortada();
+  setTimeout(saveContraportada, 300);
 }
 
 // Arma la ventanita para enviar la postal (queda escondida hasta usarla)
@@ -998,22 +2080,12 @@ function buildShareDialog() {
       <h2>Enviar mi postal</h2>
       <p>Escribe a este correo:</p>
       <p class="share-email">${SHARE_EMAIL}</p>
-      <p>Adjunta tu foto y escribe tus datos, los que van atrás de la postal:</p>
-      <p class="share-group">Tus datos</p>
-      <ul class="share-list">
-        <li>Tu nombre</li>
-        <li>Fecha</li>
-        <li>Desde dónde (ciudad, país)</li>
-      </ul>
-      <p class="share-group">Datos del poema</p>
-      <ul class="share-list">
-        <li>El poema</li>
-        <li>Su autor o autora</li>
-      </ul>
-      <p class="share-note">Al enviarla, aceptas que tu postal se muestre en la galería.</p>
+      <p>Adjunta las dos imágenes de tu postal: la <strong>portada</strong> y la <strong>contraportada</strong>.
+        Tus datos ya van escritos en la contraportada.</p>
+      <p class="share-note">Esta postal podrá ser utilizada para la construcción de este sitio web.</p>
       <div class="btn-row">
-        <button class="toggle-btn" id="shareCopy">Copiar correo y datos</button>
-        <button class="toggle-btn" id="shareDownload">Descargar mi postal</button>
+        <button class="toggle-btn" id="shareCopy">Copiar correo</button>
+        <button class="toggle-btn" id="shareDownload">Descargar portada y contraportada</button>
       </div>
       <div class="btn-row">
         <button class="primary-btn" id="shareDone">Listo</button>
@@ -1039,7 +2111,8 @@ function buildShareDialog() {
 // para no recalcular con cada letra.
 function schedulePoemRender() {
   clearTimeout(renderTimer);
-  renderTimer = setTimeout(renderPoem, 500);
+  // Con la foto abierta en grande se actualiza más rápido, casi mientras escribes
+  renderTimer = setTimeout(renderPoem, maskEditorOpen || resultViewerOpen ? 250 : 500);
 }
 
 // Dibuja el poema sobre la silueta con lo que haya en este momento.
@@ -1055,24 +2128,28 @@ function renderPoem() {
   if (poemText.length === 0) {
     appState = "vacio";
     clearPoemLayer();
+    lastPoemLines = [];
     refreshSaveButton();
     redraw();
+    refreshLargeViews();
     return;
   }
 
   appState = "procesando";
   refreshSaveButton();
 
-  buildPoemLines(poemText, () => myRenderId !== renderId, (layer) => {
+  buildPoemLines(poemText, () => myRenderId !== renderId, (layer, lines) => {
     if (myRenderId !== renderId) {
       layer.remove(); // llegó un cambio más nuevo; este dibujo ya no sirve
       return;
     }
     clearPoemLayer();
     gridLayer = layer;
+    lastPoemLines = lines;
     appState = "listo";
     refreshSaveButton();
     redraw();
+    refreshLargeViews();
   });
 }
 
@@ -1176,6 +2253,7 @@ function buildPoemLines(poemText, isStale, onComplete) {
 
   const spaceWidth = layer.textWidth(" ");
   let wordCursor = 0;
+  const lines = [];
 
   function fillSegment(xStart, xEnd, y) {
     const availableWidth = xEnd - xStart;
@@ -1214,6 +2292,7 @@ function buildPoemLines(poemText, isStale, onComplete) {
 
     const cx = xStart + availableWidth / 2;
     drawLineText(layer, line, cx, y);
+    lines.push({ y, x0: xStart, x1: xEnd, cx, text: line }); // para la animación del editor
   }
 
   const rows = [];
@@ -1228,7 +2307,7 @@ function buildPoemLines(poemText, isStale, onComplete) {
     for (const [xStart, xEnd] of segments) {
       fillSegment(xStart, xEnd, y);
     }
-  }, () => onComplete(layer));
+  }, () => onComplete(layer, lines));
 }
 
 // Reglas de color: cada color de letra tiene su sombra fija, para que
