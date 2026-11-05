@@ -61,9 +61,9 @@ let renderTimer = null; // espera a que dejes de escribir antes de redibujar
 let appState = "vacio"; // vacio -> procesando -> listo
 
 // Elementos de la interfaz
-let uploadBtn, fileInputEl, poemTextarea, cnv, canvasFrameEl;
+let fileInputEl, poemTextarea, cnv, canvasFrameEl;
 let textColorWhiteBtn, textColorBlackBtn, saveBtnEl, previewCanvasEl;
-let shareBtnEl, shareDialogEl, shareNameEl, shareFromEl, shareConsentEl, shareSubmitEl, shareFileNameEl;
+let shareBtnEl, shareDialogEl, shareCopyEl;
 
 // ---------------------------------------------------------------------
 // Ejecuta un trabajo pesado en partes pequeñas, para que la página no
@@ -100,7 +100,8 @@ function layoutBoxes() {
     const st = getComputedStyle(el);
     return el.clientWidth - parseFloat(st.paddingLeft) - parseFloat(st.paddingRight);
   };
-  let boxW = Math.max(0, Math.floor(Math.min(innerWidth(stageEl), innerWidth(slotEl))));
+  const BOX_SCALE = 0.75; // los recuadros ocupan un poco menos que el ancho disponible
+  let boxW = Math.max(0, Math.floor(Math.min(innerWidth(stageEl), innerWidth(slotEl)) * BOX_SCALE));
   applyBoxSize(boxW, boxW / POSTCARD_RATIO);
 
   // Lo que sobra de alto se reparte entre los dos recuadros
@@ -143,6 +144,7 @@ function windowResized() {
 // ---------------------------------------------------------------------
 const POSTCARD_GAP = 24;   // espacio entre postales y entre filas (px)
 const POSTCARD_SPEED = 40; // velocidad (px por segundo)
+const POSTCARD_HOVER_SPEED = 12; // velocidad más lenta con el mouse encima (px por segundo)
 const POSTCARD_RATIO = 3 / 2; // ancho / alto, como una foto normal (10x15 cm)
 const POSTCARD_TEST_COLORS = true; // prueba: cada postal con color y número propio, para seguir su recorrido
 
@@ -150,22 +152,48 @@ let postcardEls = [];
 let postcardLayout = null;
 let postcardProgress = 0;  // cuánto ha avanzado la fila completa
 let postcardLastTime = null;
-let postcardsPaused = false;     // el mouse está encima
+let postcardMouse = null;        // posición del cursor sobre las postales (o null si está fuera)
+let postcardCurrentSpeed = POSTCARD_SPEED; // cambia suave entre rápido y lento
 let postcardViewerOpen = false;  // hay una postal abierta en grande
 let postcardViewerEl, postcardLargeEl, postcardFrontEl, postcardBackEls;
-let galleryEntries = [];         // obras de postales/postales.json
+let largePostcardImage = null;   // tamaño real de la foto abierta en grande
+let galleryEntries = [];         // obras de la carpeta postales/ (1.jpg, 2.jpg, ...)
+const GALLERY_MAX = 500;         // tope de seguridad al buscar imágenes numeradas
 
-// Lee la lista de obras publicadas. Si el archivo no existe o está
-// vacío (o la página se abrió sin servidor), quedan las de muestra.
+// Revisa si existe una imagen (sin descargarla dos veces: el navegador la guarda)
+function imageExists(src) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve(true);
+    img.onerror = () => resolve(false);
+    img.src = src;
+  });
+}
+
+// Busca las postales numeradas en orden: postales/1.jpg, 2.jpg, 3.jpg...
+// y se detiene en el primer número que falte. Los datos de cada una
+// (nombre, desde, fecha, poema) se leen de postales/postales.json,
+// usando el mismo número. Si no hay imágenes, quedan las de muestra.
 async function loadGallery() {
+  let data = {};
   try {
     const res = await fetch("postales/postales.json", { cache: "no-cache" });
-    if (!res.ok) return;
-    const list = await res.json();
-    if (Array.isArray(list)) galleryEntries = list.filter((e) => e && e.imagen);
+    if (res.ok) {
+      const json = await res.json();
+      if (json && typeof json === "object" && !Array.isArray(json)) data = json;
+    }
   } catch (err) {
-    console.warn("No se pudo leer postales/postales.json; se muestran postales de muestra.", err);
+    console.warn("No se pudo leer postales/postales.json; las postales se muestran sin datos.", err);
   }
+
+  const entries = [];
+  for (let n = 1; n <= GALLERY_MAX; n++) {
+    const imagen = n + ".jpg";
+    if (!(await imageExists("postales/" + imagen))) break;
+    const info = data[String(n)] || {};
+    entries.push({ numero: n, imagen, ...info });
+  }
+  galleryEntries = entries;
 }
 
 // Crea tantas postales como caben a lo largo del recorrido completo
@@ -190,18 +218,22 @@ function buildPostcards() {
     el.style.width = cardW + "px";
     el.style.height = cardH + "px";
 
-    if (galleryEntries.length > 0) {
-      // Obra real (si hay menos obras que espacios, se repiten en orden)
-      const n = i % galleryEntries.length;
-      const entry = galleryEntries[n];
+    if (galleryEntries.length > 0 && i >= galleryEntries.length) {
+      // Espacio todavía sin obra: postal vacía, sin número y sin abrir
+      el.classList.add("postcard-empty");
+    } else if (galleryEntries.length > 0) {
+      // Obra real, cada una una sola vez
+      const entry = galleryEntries[i];
       el.style.backgroundImage = `url("postales/${encodeURI(entry.imagen)}")`;
       el.postcardData = {
-        number: n + 1,
+        number: entry.numero,
         image: "postales/" + entry.imagen,
         name: entry.nombre || "",
         place: entry.desde || "",
         date: entry.fecha || "",
-        poem: entry.poema || ""
+        poem: entry.poema || "",
+        poemAuthor: entry.autor || entry.nombre || "", // autor/a del poema (si no se indica, quien envía)
+        backColor: entry.color || "" // color del reverso (opcional)
       };
     } else {
       // Postales de muestra
@@ -218,7 +250,7 @@ function buildPostcards() {
         poem: "Aquí irá un fragmento del poema que esta persona plasmó en su autorretrato."
       };
     }
-    el.addEventListener("click", () => openPostcard(el));
+    if (el.postcardData) el.addEventListener("click", () => openPostcard(el));
     below.insertBefore(el, postcardViewerEl); // debajo del visor
     postcardEls.push(el);
   }
@@ -233,15 +265,26 @@ function openPostcard(el) {
   const data = el.postcardData;
 
   postcardFrontEl.style.background = getComputedStyle(el).backgroundColor;
+  largePostcardImage = null;
   if (data.image) {
-    // La obra completa, sin recortar
+    // La obra completa, sin recortar: la postal grande toma la forma de la foto
     postcardFrontEl.style.background = `#E6E6E6 url("${encodeURI(data.image)}") center / contain no-repeat`;
+    const img = new Image();
+    img.onload = () => {
+      if (!postcardViewerOpen) return;
+      largePostcardImage = { w: img.naturalWidth, h: img.naturalHeight };
+      sizeLargePostcard();
+    };
+    img.src = data.image;
   }
   postcardFrontEl.textContent = el.textContent;
 
   // Se usa textContent (no innerHTML) porque estos datos los escriben
   // otras personas
+  // Cada postal puede tener su propio color atrás; si no, queda el de siempre
+  postcardLargeEl.querySelector(".postcard-back").style.background = data.backColor || "";
   postcardBackEls.poem.textContent = data.poem;
+  postcardBackEls.author.textContent = data.poemAuthor ? "Poema por: " + data.poemAuthor : "";
   postcardBackEls.name.textContent = data.name;
   postcardBackEls.place.textContent = data.place;
   postcardBackEls.date.textContent = data.date;
@@ -254,21 +297,25 @@ function openPostcard(el) {
 
 function closePostcard() {
   postcardViewerOpen = false;
-  postcardsPaused = false; // siguen de inmediato, aunque el mouse siga encima
   postcardViewerEl.classList.remove("open");
 }
 
-// La postal abierta ocupa lo más posible del lado derecho (con margen),
-// sin deformarse. --h sirve para que las letras del reverso escalen.
+// La postal abierta se ve con las proporciones reales de la foto, lo más
+// grande que quepa en el lado derecho (con margen), pero nunca más grande
+// que la foto misma. --h sirve para que las letras del reverso escalen.
 function sizeLargePostcard() {
   const below = document.getElementById("below");
   const maxW = below.clientWidth * 0.65;
   const maxH = below.clientHeight * 0.65;
-  const w = Math.min(maxW, maxH * POSTCARD_RATIO);
-  const h = w / POSTCARD_RATIO;
+  const ratio = largePostcardImage ? largePostcardImage.w / largePostcardImage.h : POSTCARD_RATIO;
+  let w = Math.min(maxW, maxH * ratio);
+  if (largePostcardImage) w = Math.min(w, largePostcardImage.w);
+  const h = w / ratio;
   postcardLargeEl.style.width = w + "px";
   postcardLargeEl.style.height = h + "px";
-  postcardLargeEl.style.setProperty("--h", h + "px");
+  // Las letras del reverso escalan como en una postal 3:2 de este ancho,
+  // para que no se agranden de más si la foto es más alta
+  postcardLargeEl.style.setProperty("--h", Math.min(h, w / POSTCARD_RATIO) + "px");
 }
 
 // Arma el reverso de la postal: a la izquierda el mensaje (poema), a la
@@ -283,8 +330,8 @@ function buildPostcardBack(backEl) {
   };
 
   const message = make("pc-message", backEl);
-  make("pc-label", message, "Poema");
   const poem = make("pc-poem", message);
+  const author = make("pc-author", message); // "Poema por: ..." en pequeño, bajo el poema
 
   make("pc-divider", backEl);
 
@@ -299,7 +346,7 @@ function buildPostcardBack(backEl) {
   const place = field("Desde");
   const date = field("Fecha");
 
-  return { poem, name, place, date, stamp };
+  return { poem, author, name, place, date, stamp };
 }
 
 // Ubica cada postal según cuánto ha avanzado en el recorrido
@@ -319,9 +366,21 @@ function placePostcards() {
   });
 }
 
+// ¿El cursor está sobre una postal que se puede abrir? (las vacías no cuentan)
+function cursorOnPhoto() {
+  if (!postcardMouse) return false;
+  const el = document.elementFromPoint(postcardMouse.x, postcardMouse.y);
+  const card = el && el.closest(".postcard");
+  return !!(card && card.postcardData);
+}
+
 function animatePostcards(time) {
-  if (postcardLastTime !== null && !postcardsPaused && !postcardViewerOpen && postcardLayout) {
-    postcardProgress += ((time - postcardLastTime) / 1000) * POSTCARD_SPEED;
+  if (postcardLastTime !== null && !postcardViewerOpen && postcardLayout) {
+    const dt = (time - postcardLastTime) / 1000;
+    // Con el cursor sobre una foto van más lento (sin detenerse); el cambio es gradual
+    const target = cursorOnPhoto() ? POSTCARD_HOVER_SPEED : POSTCARD_SPEED;
+    postcardCurrentSpeed += (target - postcardCurrentSpeed) * Math.min(1, dt * 4);
+    postcardProgress += dt * postcardCurrentSpeed;
     postcardProgress %= postcardLayout.pathLength;
   }
   postcardLastTime = time;
@@ -331,8 +390,10 @@ function animatePostcards(time) {
 
 function startPostcards() {
   const below = document.getElementById("below");
-  below.addEventListener("mouseenter", () => { postcardsPaused = true; });  // se detienen al pasar el mouse
-  below.addEventListener("mouseleave", () => { postcardsPaused = false; });
+  // Se guarda dónde está el cursor; en cada cuadro se revisa si está sobre
+  // una postal (las postales se mueven, aunque el mouse esté quieto)
+  below.addEventListener("mousemove", (e) => { postcardMouse = { x: e.clientX, y: e.clientY }; });
+  below.addEventListener("mouseleave", () => { postcardMouse = null; });
 
   // Visor: fondo que cubre el lado derecho + la postal en grande, con
   // frente (la foto) y reverso (los datos)
@@ -382,6 +443,7 @@ function setup() {
   noStroke();
   noLoop(); // sin animación, solo redibuja cuando hace falta
   pixelDensity(1);
+  layoutBoxes(); // pixelDensity() devuelve el canvas a su tamaño original (en pantallas retina); se vuelve a ajustar
 
   bodyPixModel = ml5.bodyPix(CONFIG.bodyPixOptions, () => {
     modelReady = true;
@@ -400,7 +462,7 @@ function injectStyles() {
     * { box-sizing: border-box; }
     html, body {
       margin: 0; padding: 0; height: 100%;
-      background: #F4F4F4; color: #444444;
+      background: #F3EDDC; color: #444444;
       font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
       overflow: hidden;
     }
@@ -409,17 +471,23 @@ function injectStyles() {
     #app { display: flex; width: 100vw; height: 100vh; }
     #panel {
       width: 28%; min-width: 280px; flex-shrink: 0;
-      background: #EBEBEB; border-right: 1px solid #D6D6D6;
+      background: #F7E6E3; border-right: 1px solid #E8D2CE; /* rosadito muy claro */
       padding: 20px; display: flex; flex-direction: column; gap: 18px;
+      /* título arriba; foto debajo; poema y resultado se reparten el alto */
       overflow-y: auto; /* si no cabe todo, el panel hace scroll */
     }
     #panel > * { flex-shrink: 0; }
     /* Secciones del panel, una debajo de otra */
     .col { display: flex; flex-direction: column; gap: 10px; }
+    #colTitle { margin-bottom: 28px; } /* espacio fijo bajo el título; la foto va justo después */
+    #colPoem, #colResult { margin-top: auto; } /* poema y resultado se reparten el espacio que sobra */
+    #colPoem { margin-bottom: 14px; } /* sube un poco el poema (más aire hacia el resultado) */
+    #colResult { margin-bottom: 8px; } /* aire bajo los botones de guardar y enviar */
+    #colResult .btn-row { margin-top: 28px; } /* botones de guardar y enviar un poco más abajo del resultado */
     .col > * { flex-shrink: 0; }
     #title {
       font-size: 26px; font-weight: 600; line-height: 1.25; margin: 0;
-      color: #333333;
+      color: #B5543A; /* terracota */
     }
     .field-label {
       font-size: 16px; font-weight: 600; line-height: 1.2;
@@ -440,6 +508,17 @@ function injectStyles() {
       padding: 6px;
     }
     #previewBox canvas { display: block; width: 100%; height: 100%; }
+    /* El recuadro de la vista previa es también el botón para subir la foto */
+    #previewBox { cursor: pointer; }
+    #previewBox:focus-visible { outline: 2px solid #B5543A; outline-offset: 12px; }
+    #uploadLabel {
+      position: absolute; inset: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 14px; font-weight: 600; color: #555555;
+      pointer-events: none;
+    }
+    #previewBox:hover #uploadLabel { color: #B5543A; }
+    #previewBox.has-photo #uploadLabel { display: none; }
     /* Cuadro del poema como hoja de block: sin fondo, solo renglones */
     #poemInput {
       width: 100%; border: none; border-radius: 0;
@@ -475,7 +554,7 @@ function injectStyles() {
       min-width: 0; display: flex; align-items: center; justify-content: center;
       padding: 9px;
     }
-    #poemInput { resize: none; }
+    #poemInput { resize: none; height: 96px; overflow-y: auto; } /* 4 renglones de 24px; si hay más, scroll */
     #stage {
       min-width: 0; min-height: 0; overflow: hidden; display: flex; align-items: center; justify-content: center;
       padding: 9px;
@@ -484,6 +563,12 @@ function injectStyles() {
       position: relative; padding: 6px;
       display: flex; align-items: center; justify-content: center;
     }
+    /* Fondo hueso que llega justo hasta el borde de las esquinas (9px afuera) */
+    #canvasFrame::before {
+      content: ""; position: absolute; inset: -9px;
+      background: #F3EDDC;
+    }
+    #canvasFrame canvas { position: relative; } /* encima del fondo */
     #canvasFrame canvas {
       display: block;
     }
@@ -501,12 +586,12 @@ function injectStyles() {
        El movimiento lo hace placePostcards() desde JavaScript. */
     #below {
       flex: 1; min-width: 0; position: relative; overflow: hidden;
-      background: #F4F4F4;
+      background: #F3EDDC;
     }
     .postcard {
       position: absolute; top: 0; left: 0;
       border-radius: 4px; background: #D9D9D9;
-      background-size: cover; background-position: center; /* la obra llena la postal */
+      background-size: cover; background-position: center 40%; /* la obra llena la postal (50% = centrada; menos % = la foto baja) */
       will-change: transform;
       display: flex; align-items: center; justify-content: center;
       font-size: 48px; font-weight: 700; color: rgba(0, 0, 0, 0.45); /* número de prueba */
@@ -514,6 +599,7 @@ function injectStyles() {
     .postcard:nth-child(3n + 2) { background-color: #C7C7C7; }
     .postcard:nth-child(3n + 3) { background-color: #E3E3E3; }
     .postcard { cursor: pointer; }
+    .postcard.postcard-empty { cursor: default; }
     /* Ventanita para enviar la postal por correo */
     #shareDialog {
       position: fixed; inset: 0; z-index: 20;
@@ -530,24 +616,20 @@ function injectStyles() {
     .share-card h2 { margin: 0 0 6px; font-size: 18px; color: #333333; }
     .share-card p { margin: 0 0 10px; line-height: 1.45; }
     .share-note { font-size: 12px; color: #777777; }
-    .share-card label { display: block; margin: 12px 0; font-size: 13px; font-weight: 600; color: #555555; }
-    .share-card input[type="text"] {
-      display: block; width: 100%; margin-top: 4px; padding: 8px 10px;
-      border: 1px solid #CCCCCC; border-radius: 5px;
-      font-size: 14px; font-family: inherit; color: #333333;
+    .share-email {
+      font-size: 16px; font-weight: 600; color: #B5543A;
+      user-select: all; /* un clic selecciona todo el correo */
+      overflow-wrap: anywhere;
     }
-    .share-card input[type="text"]:focus { outline: none; border-color: #888888; }
-    .share-card .share-check { display: flex; gap: 8px; align-items: flex-start; font-weight: 400; }
-    .share-card .btn-row { margin-top: 16px; }
-    .share-sent { display: none; }
-    #shareDialog.sent .share-form { display: none; }
-    #shareDialog.sent .share-sent { display: block; }
+    .share-list { margin: 0 0 12px; padding-left: 20px; line-height: 1.6; font-size: 14px; }
+    .share-card p.share-group { margin: 0 0 2px; font-weight: 600; color: #333333; }
+    .share-card .btn-row { margin-top: 12px; }
     /* Visor: la postal tocada, en grande y centrada en el lado derecho */
     #postcardViewer {
       position: absolute; inset: 0; z-index: 10;
       display: none; align-items: center; justify-content: center;
       flex-direction: column; gap: 14px;
-      background: rgba(244, 244, 244, 0.65);
+      background: rgba(243, 237, 220, 0.65);
       cursor: pointer;
     }
     #postcardViewer.open { display: flex; animation: viewer-in 0.2s ease-out; }
@@ -574,15 +656,16 @@ function injectStyles() {
     /* Reverso: mensaje a la izquierda, línea al medio, datos a la derecha */
     .postcard-back {
       transform: rotateY(180deg);
-      background: #FAFAF8; color: #444444;
+      background: #F7F3EA; color: #444444; /* color hueso suave */
       display: flex; padding: calc(var(--h) * 0.08);
       gap: calc(var(--h) * 0.06);
       font-size: calc(var(--h) * 0.045);
     }
-    .pc-message { flex: 1; min-width: 0; }
-    .pc-poem { margin-top: 0.6em; line-height: 1.5; }
+    .pc-message { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+    .pc-poem { font-size: 0.85em; line-height: 1.3; white-space: pre-line; } /* respeta los saltos de línea */
+    .pc-author { margin-top: auto; padding-top: 1em; font-size: 0.7em; color: #888888; } /* siempre al fondo */
     .pc-divider { width: 1px; background: #CCCCCC; }
-    .pc-address { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+    .pc-address { flex: 1; min-width: 0; display: flex; flex-direction: column; font-size: 0.7em; } /* datos más pequeños que el poema */
     .pc-stamp {
       align-self: flex-end;
       width: calc(var(--h) * 0.22); height: calc(var(--h) * 0.26);
@@ -614,7 +697,7 @@ function buildInterface() {
   // Panel izquierdo, de arriba abajo. Sección 1: título
   const colTitle = createDiv().id("colTitle").addClass("col").parent(panel);
 
-  createElement("h1", "Ahora cada espacio de mí es un poema.")
+  createElement("h1", "Ahora cada espacio<br>de mí es un poema")
     .id("title")
     .parent(colTitle);
 
@@ -622,21 +705,25 @@ function buildInterface() {
   // Sección 2: subir foto + vista previa
   const colPhoto = createDiv().id("colPhoto").addClass("col").parent(panel);
 
-  // Input de archivo escondido; se activa con el botón de subir
+  // Input de archivo escondido; se activa al tocar el recuadro de la vista previa
   fileInputEl = createFileInput(handleFileSelected);
   fileInputEl.hide();
   fileInputEl.parent(colPhoto);
 
-  uploadBtn = createButton("Subir autorretrato");
-  uploadBtn.addClass("primary-btn");
-  uploadBtn.parent(colPhoto);
-  uploadBtn.mousePressed(() => fileInputEl.elt.click());
-
-  // Vista previa: la foto con la zona detectada como retrato marcada
+  // Vista previa: la foto con la zona detectada como retrato marcada.
+  // El mismo recuadro sirve para subir (o cambiar) el autorretrato.
   const previewSlot = createDiv().id("previewSlot").parent(colPhoto);
   const previewBox = createDiv().id("previewBox").parent(previewSlot);
+  previewBox.attribute("role", "button");
+  previewBox.attribute("tabindex", "0");
+  previewBox.attribute("aria-label", "Subir autorretrato");
+  previewBox.elt.addEventListener("click", () => fileInputEl.elt.click());
+  previewBox.elt.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInputEl.elt.click(); }
+  });
   previewCanvasEl = document.createElement("canvas");
   previewBox.elt.appendChild(previewCanvasEl);
+  createDiv("Subir autorretrato").id("uploadLabel").parent(previewBox);
   ["tl", "tr", "bl", "br"].forEach((pos) => {
     createDiv().addClass("corner corner-" + pos).parent(previewBox);
   });
@@ -644,8 +731,14 @@ function buildInterface() {
   // Sección 3: poema + color de la letra
   const colPoem = createDiv().id("colPoem").addClass("col").parent(panel);
 
-  createDiv("Escribe tu poema").addClass("field-label").parent(colPoem);
+  poemTextarea = createElement("textarea", "");
+  poemTextarea.id("poemInput");
+  poemTextarea.attribute("rows", "4");
+  poemTextarea.attribute("placeholder", "Escribe aquí tu poema"); // se borra solo al empezar a escribir
+  poemTextarea.parent(colPoem);
+  poemTextarea.input(() => schedulePoemRender());
 
+  // Letra blanca o negra, debajo de los renglones
   const colorRow = createDiv().addClass("btn-row").parent(colPoem);
 
   textColorWhiteBtn = createButton("Letra blanca");
@@ -659,12 +752,6 @@ function buildInterface() {
   textColorBlackBtn.mousePressed(() => setTextColor([0, 0, 0]));
 
   updateColorButtonsUI();
-
-  poemTextarea = createElement("textarea", "");
-  poemTextarea.id("poemInput");
-  poemTextarea.attribute("rows", "6");
-  poemTextarea.parent(colPoem);
-  poemTextarea.input(() => schedulePoemRender());
 
   // Sección 4: resultado final (se genera solo) + guardar
   const colResult = createDiv().id("colResult").addClass("col").parent(panel);
@@ -767,6 +854,8 @@ function drawPreview() {
   const ctx = previewCanvasEl.getContext("2d");
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, boxW, boxH);
+  // Con foto, se esconde el texto "Subir autorretrato" (tocar de nuevo la cambia)
+  previewCanvasEl.parentElement.classList.toggle("has-photo", photoReady);
   if (!photoReady) return;
 
   const imgW = originalImg.width;
@@ -780,14 +869,14 @@ function drawPreview() {
   ctx.drawImage(originalImg.canvas, x, y, drawW, drawH);
 
   if (maskReady && maskImg) {
-    // Pinta de gris oscuro solo donde la máscara dice "persona"
+    // Pinta de turquesa solo donde la máscara dice "persona"
     const tint = document.createElement("canvas");
     tint.width = imgW;
     tint.height = imgH;
     const tctx = tint.getContext("2d");
     tctx.drawImage(maskImg.canvas, 0, 0);
     tctx.globalCompositeOperation = "source-in";
-    tctx.fillStyle = "#222222";
+    tctx.fillStyle = "#2FB5A8"; // turquesa
     tctx.fillRect(0, 0, imgW, imgH);
 
     ctx.globalAlpha = 0.5;
@@ -849,65 +938,55 @@ function onSaveClick() {
 
 // ---------------------------------------------------------------------
 // ENVIAR LA POSTAL POR CORREO
-// La página no puede adjuntar archivos a un correo por sí sola, así que:
-// descarga la imagen y abre el correo de la persona ya escrito (con sus
-// datos y su poema). La persona solo adjunta la imagen y envía.
+// Muestra una ventanita con el correo al que hay que enviar la postal:
+// la persona adjunta su imagen y escribe los datos que van atrás de la
+// postal (nombre, desde dónde, fecha y poema).
 // ---------------------------------------------------------------------
 const SHARE_EMAIL = "bernardita.jesus1@gmail.com";
-const MAX_POEM_IN_EMAIL = 1200; // los enlaces de correo muy largos pueden fallar
 
 function openShareDialog() {
   if (appState !== "listo") return;
-  shareDialogEl.classList.remove("sent");
+  shareCopyEl.textContent = "Copiar correo y datos";
   shareDialogEl.classList.add("open");
-  shareNameEl.focus();
-  refreshShareSubmit();
+  shareCopyEl.focus();
 }
 
 function closeShareDialog() {
   shareDialogEl.classList.remove("open");
 }
 
-// Solo deja enviar con nombre y con el permiso marcado
-function refreshShareSubmit() {
-  shareSubmitEl.disabled = !(shareNameEl.value.trim() && shareConsentEl.checked);
+// Texto listo para pegar en el correo: a quién enviarlo y los datos que
+// van atrás de la postal. El poema y la fecha de hoy ya van puestos.
+function shareTemplate() {
+  const poem = poemTextarea.value().trim();
+  const today = new Date().toLocaleDateString("es-CL", { day: "numeric", month: "long", year: "numeric" });
+  return (
+    "Para: " + SHARE_EMAIL + "\n" +
+    "Asunto: Postal para la galería\n\n" +
+    "TUS DATOS\n" +
+    "Nombre: \n" +
+    "Fecha: " + today + "\n" +
+    "Desde dónde: \n\n" +
+    "DATOS DEL POEMA\n" +
+    "Poema:\n" + (poem || "") + "\n\n" +
+    "Autor o autora: \n\n" +
+    "(Recuerda adjuntar tu postal)"
+  );
 }
 
-function onShareSubmit() {
-  const name = shareNameEl.value.trim();
-  const place = shareFromEl.value.trim();
-  if (!name || !shareConsentEl.checked) return;
+// Copia el correo y todos los datos al portapapeles
+async function copyShareData() {
+  try {
+    await navigator.clipboard.writeText(shareTemplate());
+    shareCopyEl.textContent = "¡Copiado!";
+  } catch (err) {
+    shareCopyEl.textContent = "No se pudo copiar";
+  }
+}
 
-  // 1) Descarga la imagen (en JPG, para que pese poco en el correo)
-  const simpleName = name.normalize("NFD").replace(/[̀-ͯ]/g, "") // sin tildes
-    .toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-  const filename = "postal-" + (simpleName || "sin-nombre") + "-" + Date.now();
-  saveCanvas(cnv, filename, "jpg");
-
-  // 2) Abre el correo con todo escrito
-  let poem = poemTextarea.value().trim();
-  if (poem.length > MAX_POEM_IN_EMAIL) poem = poem.slice(0, MAX_POEM_IN_EMAIL) + "…";
-  const date = new Date().toLocaleDateString("es-CL", { day: "numeric", month: "long", year: "numeric" });
-
-  const subject = "Postal para la galería — " + name;
-  const body =
-    "Hola, te envío mi postal para la galería.\n\n" +
-    "Nombre: " + name + "\n" +
-    "Desde: " + (place || "—") + "\n" +
-    "Fecha: " + date + "\n\n" +
-    "Poema:\n" + poem + "\n\n" +
-    "Acepto que mi obra se muestre públicamente en la galería.\n\n" +
-    "(Adjunto la imagen " + filename + ".jpg)";
-
-  const link = document.createElement("a");
-  link.href = "mailto:" + SHARE_EMAIL +
-    "?subject=" + encodeURIComponent(subject) +
-    "&body=" + encodeURIComponent(body);
-  setTimeout(() => link.click(), 400); // un momento después, para no cortar la descarga
-
-  // 3) Muestra qué falta hacer
-  shareFileNameEl.textContent = filename + ".jpg";
-  shareDialogEl.classList.add("sent");
+// Descarga la postal en JPG (pesa menos para adjuntarla al correo)
+function downloadPostcardForEmail() {
+  saveCanvas(cnv, "mi-postal-" + Date.now(), "jpg");
 }
 
 // Arma la ventanita para enviar la postal (queda escondida hasta usarla)
@@ -916,41 +995,35 @@ function buildShareDialog() {
   shareDialogEl.id = "shareDialog";
   shareDialogEl.innerHTML = `
     <div class="share-card">
-      <div class="share-step share-form">
-        <h2>Enviar mi postal</h2>
-        <p class="share-note">Estos datos irán en el reverso de tu postal.</p>
-        <label>Tu nombre <input type="text" id="shareName" maxlength="60"></label>
-        <label>Desde dónde <input type="text" id="shareFrom" maxlength="60" placeholder="Ciudad, país"></label>
-        <label class="share-check">
-          <input type="checkbox" id="shareConsent">
-          Acepto que mi obra se muestre públicamente en la galería
-        </label>
-        <div class="btn-row">
-          <button class="toggle-btn" id="shareCancel">Cancelar</button>
-          <button class="primary-btn" id="shareSubmit" disabled>Abrir correo</button>
-        </div>
+      <h2>Enviar mi postal</h2>
+      <p>Escribe a este correo:</p>
+      <p class="share-email">${SHARE_EMAIL}</p>
+      <p>Adjunta tu foto y escribe tus datos, los que van atrás de la postal:</p>
+      <p class="share-group">Tus datos</p>
+      <ul class="share-list">
+        <li>Tu nombre</li>
+        <li>Fecha</li>
+        <li>Desde dónde (ciudad, país)</li>
+      </ul>
+      <p class="share-group">Datos del poema</p>
+      <ul class="share-list">
+        <li>El poema</li>
+        <li>Su autor o autora</li>
+      </ul>
+      <p class="share-note">Al enviarla, aceptas que tu postal se muestre en la galería.</p>
+      <div class="btn-row">
+        <button class="toggle-btn" id="shareCopy">Copiar correo y datos</button>
+        <button class="toggle-btn" id="shareDownload">Descargar mi postal</button>
       </div>
-      <div class="share-step share-sent">
-        <h2>Ya casi</h2>
-        <p>Se descargó tu postal: <strong id="shareFileName"></strong></p>
-        <p>En el correo que se abrió, <strong>adjunta esa imagen</strong> y envíalo.</p>
-        <p class="share-note">Si no se abrió tu correo, envía la imagen con tu nombre y tu poema a
-          <strong>${SHARE_EMAIL}</strong></p>
+      <div class="btn-row">
         <button class="primary-btn" id="shareDone">Listo</button>
       </div>
     </div>`;
   document.body.appendChild(shareDialogEl);
 
-  shareNameEl = shareDialogEl.querySelector("#shareName");
-  shareFromEl = shareDialogEl.querySelector("#shareFrom");
-  shareConsentEl = shareDialogEl.querySelector("#shareConsent");
-  shareSubmitEl = shareDialogEl.querySelector("#shareSubmit");
-  shareFileNameEl = shareDialogEl.querySelector("#shareFileName");
-
-  shareNameEl.addEventListener("input", refreshShareSubmit);
-  shareConsentEl.addEventListener("change", refreshShareSubmit);
-  shareSubmitEl.addEventListener("click", onShareSubmit);
-  shareDialogEl.querySelector("#shareCancel").addEventListener("click", closeShareDialog);
+  shareCopyEl = shareDialogEl.querySelector("#shareCopy");
+  shareCopyEl.addEventListener("click", copyShareData);
+  shareDialogEl.querySelector("#shareDownload").addEventListener("click", downloadPostcardForEmail);
   shareDialogEl.querySelector("#shareDone").addEventListener("click", closeShareDialog);
   // Tocar fuera de la ventanita o apretar Esc la cierra
   shareDialogEl.addEventListener("click", (e) => { if (e.target === shareDialogEl) closeShareDialog(); });
@@ -1206,5 +1279,5 @@ function draw() {
 }
 
 function drawWaitingScreen() {
-  background(244, 244, 244);
+  background(243, 237, 220);
 }

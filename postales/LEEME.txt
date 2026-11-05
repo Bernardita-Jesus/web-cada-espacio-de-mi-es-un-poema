@@ -1,42 +1,57 @@
 CÓMO AGREGAR UNA POSTAL A LA GALERÍA
 ====================================
 
+Las postales van numeradas: 1.jpg, 2.jpg, 3.jpg, ...
+
 Cuando alguien te envíe su postal por correo:
 
-1. Guarda la imagen adjunta en esta carpeta (postales/).
-   Usa un nombre simple, sin espacios, por ejemplo: ana-perez.jpg
+1. Guarda la imagen adjunta en esta carpeta (postales/) con el
+   siguiente número que toque, en formato .jpg.
+   Por ejemplo, si ya existen 1.jpg y 2.jpg, la nueva es 3.jpg.
 
-2. Abre postales.json y agrega sus datos (los copias del correo).
-   Cada postal va entre llaves { }, separada de la anterior por una coma.
+   Ojo:
+   - Los números deben ir seguidos, sin saltarse ninguno. La web busca
+     1.jpg, 2.jpg, 3.jpg... y se detiene en el primero que falte.
+   - La extensión tiene que ser .jpg (en minúscula).
+
+2. Abre postales.json y agrega sus datos (los copias del correo),
+   usando el mismo número de la imagen.
 
    Ejemplo con dos postales:
 
-   [
-     {
-       "imagen": "ana-perez.jpg",
+   {
+     "1": {
        "nombre": "Ana Pérez",
        "desde": "Valparaíso, Chile",
        "fecha": "29 de septiembre de 2026",
        "poema": "cada espacio de mí es un poema que respira"
      },
-     {
-       "imagen": "luis-rojas.jpg",
+     "2": {
        "nombre": "Luis Rojas",
        "desde": "Lima, Perú",
        "fecha": "1 de octubre de 2026",
        "poema": "el texto de su poema"
      }
-   ]
+   }
+
+   "nombre" es quien envía la postal; "autor" es quien escribió el poema
+   (sale abajo del poema como "Poema por: ..."). Si no pones "autor",
+   se usa el "nombre".
 
    Ojo:
-   - "imagen" tiene que ser exactamente el nombre del archivo.
    - Si el poema tiene comillas ("), escríbelas como \"
    - La última postal NO lleva coma después de su }.
+   - Opcional: "color" es el color de la parte de atrás de la postal,
+     por ejemplo "#DDF1EE" (turquesa clarito). Conviene usar tonos
+     suaves para que el texto se lea bien. Sin "color", queda hueso.
+   - Si una postal no tiene datos en postales.json, igual se muestra,
+     solo que sin nombre ni poema en el reverso.
 
 3. Sube los cambios a GitHub (commit + push). La galería se actualiza sola.
 
-Mientras postales.json esté vacío ( [] ), la web muestra postales de muestra.
+Mientras no haya ninguna imagen numerada (1.jpg), la web muestra
+postales de muestra.
 
 Nota: para ver la galería en tu computador, abre la web con un servidor
 local (por ejemplo, "Live Server" en VS Code). Si abres index.html con
-doble clic, el navegador no deja leer postales.json y se ven las de muestra.
+doble clic, el navegador no deja leer postales.json.
