@@ -108,8 +108,13 @@ function layoutBoxes() {
     const st = getComputedStyle(el);
     return el.clientWidth - parseFloat(st.paddingLeft) - parseFloat(st.paddingRight);
   };
-  const BOX_SCALE = 0.62; // los recuadros ocupan un poco menos que el ancho disponible
-  let boxW = Math.max(0, Math.floor(Math.min(innerWidth(stageEl), innerWidth(slotEl)) * BOX_SCALE));
+  const BOX_SCALE = isMobile() ? 0.96 : 0.62; // los recuadros ocupan un poco menos que el ancho disponible
+  // En el teléfono solo se ve una etapa (las otras están escondidas y miden 0),
+  // así que se mide el panel, menos el margen de 9px a cada lado de los recuadros
+  const available = isMobile()
+    ? innerWidth(panelEl) - 18
+    : Math.min(innerWidth(stageEl), innerWidth(slotEl));
+  let boxW = Math.max(0, Math.floor(available * BOX_SCALE));
   applyBoxSize(boxW, boxW / POSTCARD_RATIO);
 
   // Lo que sobra de alto se reparte entre los dos recuadros
@@ -138,7 +143,57 @@ function applyBoxSize(boxW, boxH) {
   cnv.elt.style.height = Math.floor(height * scale) + "px";
 }
 
+// ---------------------------------------------------------------------
+// TELÉFONO
+// En pantallas chicas el panel va arriba, las postales debajo (la página
+// hace scroll) y las vistas en grande ocupan toda la pantalla.
+// Debe coincidir con el @media del final de injectStyles().
+// ---------------------------------------------------------------------
+const MOBILE_QUERY = "(max-width: 700px), (max-height: 500px) and (orientation: landscape)";
+function isMobile() {
+  return window.matchMedia(MOBILE_QUERY).matches;
+}
+
+// Espacio disponible para las vistas en grande: en el teléfono toda la
+// pantalla; en el computador, el lado derecho
+function viewerArea() {
+  if (isMobile()) return { w: window.innerWidth, h: window.innerHeight };
+  const below = document.getElementById("below");
+  return { w: below.clientWidth, h: below.clientHeight };
+}
+
+// Alto de referencia para las letras del reverso. En el teléfono la postal
+// es angosta, así que se permite que crezcan un poco más (si cabe a lo alto)
+function backTextHeight(w, h) {
+  return Math.min(h, w / (isMobile() ? 1.15 : POSTCARD_RATIO));
+}
+
+// Con una vista en grande abierta, la página de atrás no hace scroll
+function updateScrollLock() {
+  // (en el teléfono el editor va dentro de la página, así que ahí sí se puede hacer scroll)
+  const open = (maskEditorOpen && !isMobile()) || resultViewerOpen || postcardViewerOpen;
+  document.body.classList.toggle("viewer-open", open);
+}
+
+// En el teléfono, el título y la descripción van arriba de todo, sobre la
+// fila de postales; en el computador, al comienzo del panel
+function placeTitle() {
+  const titleEl = document.getElementById("colTitle");
+  const appEl = document.getElementById("app");
+  const panelEl = document.getElementById("panel");
+  if (!titleEl || !appEl || !panelEl) return;
+  if (isMobile()) {
+    if (titleEl.parentElement !== appEl) appEl.insertBefore(titleEl, appEl.firstChild);
+  } else if (titleEl.parentElement !== panelEl) {
+    panelEl.insertBefore(titleEl, panelEl.firstChild);
+  }
+}
+
 function windowResized() {
+  placeTitle();
+  placeMaskEditor();
+  updateScrollLock();
+  updateStepUI();
   layoutBoxes();
   drawPreview();
   sizeMaskEditor();
@@ -212,17 +267,29 @@ async function loadGallery() {
 function buildPostcards() {
   const below = document.getElementById("below");
   if (!below) return;
-  postcardEls.forEach((el) => el.remove());
-
   const W = below.clientWidth;
   const H = below.clientHeight;
-  const cardH = Math.max(40, (H - POSTCARD_GAP * 4) / 3); // tres filas + espacios
-  const cardW = cardH * POSTCARD_RATIO;
-  const rowLength = W + cardW;      // de totalmente afuera a un lado, a totalmente afuera al otro
-  const pathLength = rowLength * 3; // las tres filas seguidas
-  const count = Math.max(1, Math.floor(pathLength / (cardW + POSTCARD_GAP)));
+  // En el teléfono, al hacer scroll aparece y desaparece la barra del
+  // navegador y eso cuenta como "cambio de tamaño": si nada cambió, no se rearma
+  // En el computador, tres filas en zigzag; en el teléfono, una sola fila
+  // de postales chicas arriba
+  const rows = isMobile() ? 1 : 3;
+  const gap = isMobile() ? 10 : POSTCARD_GAP;
+  const buildKey = W + "x" + H + "x" + galleryEntries.length + "x" + rows;
+  if (buildKey === buildPostcards.lastKey && postcardEls.length) {
+    if (postcardViewerOpen) sizeLargePostcard();
+    return;
+  }
+  buildPostcards.lastKey = buildKey;
+  postcardEls.forEach((el) => el.remove());
 
-  postcardLayout = { W, cardW, cardH, rowLength, pathLength, spacing: pathLength / count };
+  const cardH = Math.max(40, (H - gap * (rows + 1)) / rows); // las filas + espacios
+  const cardW = cardH * POSTCARD_RATIO;
+  const rowLength = W + cardW;         // de totalmente afuera a un lado, a totalmente afuera al otro
+  const pathLength = rowLength * rows; // las filas seguidas
+  const count = Math.max(1, Math.floor(pathLength / (cardW + gap)));
+
+  postcardLayout = { W, cardW, cardH, rowLength, pathLength, rows, gap, spacing: pathLength / count };
   postcardEls = [];
   for (let i = 0; i < count; i++) {
     const el = document.createElement("div");
@@ -305,20 +372,22 @@ function openPostcard(el) {
   postcardLargeEl.classList.remove("flipped");
   sizeLargePostcard();
   postcardViewerEl.classList.add("open");
+  updateScrollLock();
 }
 
 function closePostcard() {
   postcardViewerOpen = false;
   postcardViewerEl.classList.remove("open");
+  updateScrollLock();
 }
 
 // La postal abierta se ve con las proporciones reales de la foto, lo más
 // grande que quepa en el lado derecho (con margen), pero nunca más grande
 // que la foto misma. --h sirve para que las letras del reverso escalen.
 function sizeLargePostcard() {
-  const below = document.getElementById("below");
-  const maxW = below.clientWidth * 0.65;
-  const maxH = below.clientHeight * 0.65;
+  const area = viewerArea();
+  const maxW = area.w * (isMobile() ? 0.92 : 0.65);
+  const maxH = area.h * (isMobile() ? 0.72 : 0.65);
   const ratio = largePostcardImage ? largePostcardImage.w / largePostcardImage.h : POSTCARD_RATIO;
   let w = Math.min(maxW, maxH * ratio);
   if (largePostcardImage) w = Math.min(w, largePostcardImage.w);
@@ -327,7 +396,7 @@ function sizeLargePostcard() {
   postcardLargeEl.style.height = h + "px";
   // Las letras del reverso escalan como en una postal 3:2 de este ancho,
   // para que no se agranden de más si la foto es más alta
-  postcardLargeEl.style.setProperty("--h", Math.min(h, w / POSTCARD_RATIO) + "px");
+  postcardLargeEl.style.setProperty("--h", backTextHeight(w, h) + "px");
 }
 
 // Arma el reverso de la postal: a la izquierda el mensaje (poema), a la
@@ -364,16 +433,16 @@ function buildPostcardBack(backEl) {
 // Ubica cada postal según cuánto ha avanzado en el recorrido
 function placePostcards() {
   if (!postcardLayout) return;
-  const { W, cardW, cardH, rowLength, pathLength, spacing } = postcardLayout;
+  const { W, cardW, cardH, rowLength, pathLength, rows, gap, spacing } = postcardLayout;
 
   postcardEls.forEach((el, i) => {
     const s = (postcardProgress + i * spacing) % pathLength;
     const leg = Math.floor(s / rowLength); // 0 = abajo, 1 = medio, 2 = arriba
     const t = s - leg * rowLength;         // avance dentro de esa fila
-    const goingLeft = leg !== 1;           // abajo y arriba van hacia la izquierda
+    const goingLeft = leg % 2 === 0;       // abajo y arriba van hacia la izquierda
     const x = goingLeft ? W - t : -cardW + t;
-    const row = 2 - leg;                   // fila en pantalla: 0 arriba ... 2 abajo
-    const y = POSTCARD_GAP + row * (cardH + POSTCARD_GAP);
+    const row = rows - 1 - leg;            // fila en pantalla: 0 arriba ... 2 abajo
+    const y = gap + row * (cardH + gap);
     el.style.transform = `translate(${x}px, ${y}px)`;
   });
 }
@@ -387,7 +456,7 @@ function cursorOnPhoto() {
 }
 
 function animatePostcards(time) {
-  if (postcardLastTime !== null && !postcardViewerOpen && !maskEditorOpen && !resultViewerOpen && postcardLayout) {
+  if (postcardLastTime !== null && !postcardViewerOpen && !(maskEditorOpen && !isMobile()) && !resultViewerOpen && postcardLayout) {
     const dt = (time - postcardLastTime) / 1000;
     // Con el cursor sobre una foto van más lento (sin detenerse); el cambio es gradual
     const target = cursorOnPhoto() ? POSTCARD_HOVER_SPEED : POSTCARD_SPEED;
@@ -779,7 +848,8 @@ function injectStyles() {
       position: absolute; top: 12%; left: 50%; transform: translateX(-50%);
     }
     .sent-message p { margin: 0 0 10px; }
-    .sent-message .sent-copy { width: auto; display: inline-block; padding: 9px 22px; margin: 0 0 12px; }
+    .sent-message .sent-copy, .sent-message .sent-save { width: auto; display: inline-block; padding: 9px 22px; margin: 0 4px 12px; }
+    .sent-message .sent-save { background: #B5543A; } /* lo primero que hay que hacer */
     .sent-title { font-size: 18px; font-weight: 600; color: #B5543A; }
     #maskEditor.sent .sent-message { display: block; animation: viewer-in 0.4s ease-out; }
     /* Reverso editable */
@@ -887,6 +957,98 @@ function injectStyles() {
       letter-spacing: 0.06em; color: #888888;
     }
     .pc-value { min-width: 0; overflow-wrap: anywhere; } /* si no cabe, pasa a otra línea */
+
+    /* Solo en el teléfono: barra de pasos y botón "Plasmar poema" */
+    .mobile-only { display: none; }
+    #stepNav {
+      gap: 6px; margin: 0 -20px; padding: 10px 20px;
+      border-top: 1px solid #E8D2CE;
+    }
+    .step-tab {
+      flex: 1; min-width: 0; min-height: 40px;
+      display: flex; align-items: center; justify-content: center; gap: 6px;
+      background: transparent; border: 1px solid #E0C6C1; border-radius: 20px;
+      font: inherit; font-size: 12.5px; font-weight: 600; color: #8C6F69;
+      cursor: pointer; padding: 6px 4px;
+    }
+    .step-num {
+      flex-shrink: 0; width: 20px; height: 20px; border-radius: 50%;
+      display: inline-flex; align-items: center; justify-content: center;
+      background: #EBD3CE; color: #8C6F69; font-size: 11px;
+    }
+    .step-tab.current { background: #B5543A; border-color: #B5543A; color: #FFFFFF; }
+    .step-tab.current .step-num { background: #FFFFFF; color: #B5543A; }
+    .step-tab:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* ---------- TELÉFONO (igual que MOBILE_QUERY) ----------
+       El panel arriba a todo el ancho, las postales debajo, y la página
+       hace scroll. Las vistas en grande cubren toda la pantalla. */
+    @media (max-width: 700px), (max-height: 500px) and (orientation: landscape) {
+      html, body { height: auto; overflow-x: hidden; overflow-y: auto; }
+      body.viewer-open { overflow: hidden; } /* con algo abierto, no se mueve lo de atrás */
+      /* Arriba una fila de postales chicas; abajo el panel, que llena el resto */
+      #app { flex-direction: column; width: 100%; height: auto; min-height: 100vh; min-height: 100svh; }
+      #below {
+        order: -1; flex: none; height: 140px;
+        background: #F3EDDC; /* hueso */
+        border-bottom: 1px solid #E8D2CE;
+      }
+      .postcard.postcard-empty { background-color: #E2C16B; } /* postales vacías: amarillo mostaza suave */
+      .postcard { font-size: 22px; } /* número de prueba, a la medida de la postal chica */
+      #panel {
+        flex: 1; width: 100%; min-width: 0; overflow: visible;
+        border-right: none; padding-top: 8px;
+      }
+      #colTitle {
+        order: -2; /* arriba de todo, antes de las postales */
+        background: #F7E6E3; padding: 32px 20px 16px; /* aire arriba: baja el título y todo lo demás */
+        border-bottom: 1px solid #E8D2CE;
+      }
+      #stepNav { border-top: none; }
+      #title { font-size: 22px; }
+      #subtitle { font-size: 12.5px; }
+      #poemInput { font-size: 16px; height: 72px; } /* 16px: con menos el iPhone hace zoom al escribir. 3 renglones de 24px; si hay más, scroll */
+
+      /* Una etapa a la vez: la barra de pasos elige cuál se ve */
+      .mobile-only { display: flex; }
+      .step-card { display: none; flex: 1 0 auto; justify-content: flex-start; padding-top: 20px; padding-bottom: 28px; }
+      #panel[data-step="1"] #colPhoto,
+      #panel[data-step="2"] #colPoem,
+      #panel[data-step="3"] #colResult { display: flex; }
+      .step-card.active { background: transparent; } /* ya se distingue por estar sola */
+      .step-card .field-label { color: #B5543A; text-align: center; }
+      /* sin "Silueta de autorretrato" ni "Poema plasmado": la barra ya dice en qué paso vas */
+      #colPhoto .field-label, #colPoem .field-label { display: none; }
+      #poemPlasmar {
+        width: min(260px, 100%); align-self: center; margin-top: 6px;
+        align-items: center; justify-content: center; /* texto centrado (es flex por .mobile-only) */
+      }
+
+      #resultViewer, #postcardViewer { position: fixed; }
+      /* fondo hueso entero: en el teléfono atrás está el panel, no las postales */
+      #resultViewer, #postcardViewer { background: #F3EDDC; }
+      /* El editor va dentro del panel, bajo la barra de pasos (ver placeMaskEditor) */
+      #maskEditor {
+        position: relative; inset: auto; z-index: auto;
+        background: transparent; gap: 12px;
+        margin: 0 -20px; padding: 18px 0 28px;
+      }
+      #maskEditor #poemBox { width: calc(100% - 50px) !important; margin: 10px auto 4px; } /* renglones bajo la foto */
+      #maskEditor.sending { min-height: 560px; justify-content: flex-start; } /* lugar para el sobre y el mensaje */
+
+      /* Botones: a todo el ancho y más fáciles de tocar */
+      .mask-editor-tools, .final-block, .save-only { width: calc(100% - 32px); }
+      .mask-editor-tools { flex-wrap: wrap; }
+      #maskChange { flex: 1 1 100%; }
+      .primary-btn, .toggle-btn { min-height: 42px; font-size: 13px; }
+      .mask-editor-hint, #postcardHint { padding: 0 16px; text-align: center; }
+
+      .complete-prompt, .stamp-offer { padding: 0 16px; max-width: 100%; }
+      .stamp-offer-title { font-size: 19px; }
+      .stamp-offer-row { gap: 10px; }
+      .sent-message { width: calc(100% - 32px); top: 6%; }
+      #resultViewer img { max-width: 92%; max-height: 70%; }
+    }
   `;
   const styleEl = document.createElement("style");
   styleEl.innerHTML = css;
@@ -906,6 +1068,17 @@ function buildInterface() {
   createP("Una web para representarte y cubrirte de un poema. Subes tu foto, escribes, y tus palabras se acomodan dentro de tu silueta.")
     .id("subtitle")
     .parent(colTitle);
+
+  // Solo en el teléfono: los tres pasos, para ver una etapa a la vez
+  const stepNav = createDiv().id("stepNav").addClass("btn-row mobile-only").parent(panel);
+  ["Retrato", "Poema", "Postal"].forEach((label, i) => {
+    const tab = document.createElement("button");
+    tab.className = "step-tab";
+    tab.dataset.step = i + 1;
+    tab.innerHTML = `<span class="step-num">${i + 1}</span><span>${label}</span>`;
+    tab.addEventListener("click", () => goToStep(i + 1));
+    stepNav.elt.appendChild(tab);
+  });
 
 
   // Sección 2: subir foto + vista previa
@@ -963,8 +1136,15 @@ function buildInterface() {
     createDiv().addClass("corner corner-" + pos).parent(poemBox);
   });
   // "Letra blanca / Letra negra" ya no van aquí: están bajo la foto en grande
-  // Tocar el cuadro del poema vuelve a mostrar cómo se escribe, en grande
-  poemBox.elt.addEventListener("click", replayPoemAnimation);
+  // Tocar el cuadro del poema vuelve a mostrar cómo se escribe, en grande.
+  // En el teléfono no: la foto en grande taparía el teclado. Ahí está el
+  // botón "Plasmar poema", para cuando termines de escribir.
+  poemBox.elt.addEventListener("click", () => { if (!isMobile()) replayPoemAnimation(); });
+  const plasmarBtn = createButton("Plasmar poema").id("poemPlasmar").addClass("primary-btn mobile-only").parent(colPoem);
+  plasmarBtn.elt.addEventListener("click", () => {
+    poemTextarea.elt.blur(); // cierra el teclado
+    replayPoemAnimation();
+  });
 
   // Sección 4: resultado final (se genera solo) + guardar
   const colResult = createDiv().id("colResult").addClass("col step-card").parent(panel);
@@ -998,6 +1178,7 @@ function buildInterface() {
   // Lado derecho: las postales (se crean y mueven en buildPostcards)
   createDiv().id("below").parent(appDiv);
 
+  placeTitle();
   layoutBoxes(); // ahora que todo está armado, se puede medir
   updateStepUI();
 }
@@ -1042,6 +1223,8 @@ function handleFileSelected(file) {
 
     photoReady = true;
     maskReady = false;
+    silhouetteDone = false; // foto nueva: se vuelve a partir por la silueta
+    letterDone = false;
     maskImg = null;
     closeResultViewer();
     photoId++;
@@ -1198,15 +1381,18 @@ function buildMaskEditor() {
       <p class="sent-title">Tu postal está en el sobre</p>
       <p>Tienes que enviar ambas fotos, la <strong>portada</strong> y la <strong>contraportada</strong>, a este correo:</p>
       <p class="share-email">${SHARE_EMAIL}</p>
+      <button class="primary-btn sent-save">Guardar en mis fotos</button>
       <button class="primary-btn sent-copy">Copiar correo</button>
-      <p class="share-note">Ya se descargaron en tu computador. Esta postal podrá ser utilizada para la construcción de este sitio web.</p>
+      <p class="share-note"></p>
     </div>`;
-  document.getElementById("below").appendChild(maskEditorEl);
+  placeMaskEditor();
 
   maskEditorCanvasEl = maskEditorEl.querySelector("#maskEditorCanvas");
   editorCardEl = maskEditorEl.querySelector(".editor-card");
   editorBackEls = buildEditorBack(maskEditorEl.querySelector("#editorBack"));
   // "Copiar correo" del mensaje final
+  // "Guardar en mis fotos" (solo en el teléfono, ver playEnvelope)
+  maskEditorEl.querySelector(".sent-save").addEventListener("click", saveBothSides);
   const sentCopy = maskEditorEl.querySelector(".sent-copy");
   sentCopy.addEventListener("click", async () => {
     try { await navigator.clipboard.writeText(SHARE_EMAIL); sentCopy.textContent = "¡Copiado!"; }
@@ -1221,6 +1407,7 @@ function buildMaskEditor() {
   maskEditorHintEl = maskEditorEl.querySelector(".mask-editor-hint");
   maskEditorToolsEl = maskEditorEl.querySelector(".mask-editor-tools");
   maskEditorFinalEl = makeFinalRow(maskEditorEl, () => {
+    letterDone = true; // ya se puede ir a la Postal
     maskEditorHintEl.textContent = editorHint();
     updateStepUI();
     fillEditorBack();
@@ -1234,6 +1421,7 @@ function buildMaskEditor() {
   // Tocar fuera de la foto o apretar Esc cierra (y al terminar, tocar en cualquier parte)
   maskEditorEl.addEventListener("click", (e) => {
     if (e.target.closest("button")) return; // los botones no cierran
+    if (e.target.closest("#poemBox")) return; // escribir el poema (en el teléfono, sobre la foto) tampoco
     if (stampJustDragged) { stampJustDragged = false; return; } // soltar la estampilla no cierra
     if (maskEditorEl.classList.contains("sending")) {
       // mientras se ensobra no se cierra; ya enviada, solo tocar fuera del mensaje cierra
@@ -1279,6 +1467,7 @@ function openMaskEditor() {
   editorAnimId++;
   editorPhase = "edit";
   maskEditorOpen = true;
+  placeMaskEditor();
   setBrushMode("paint");
   maskEditorEl.classList.add("open");
   maskEditorEl.classList.remove("done");
@@ -1287,6 +1476,7 @@ function openMaskEditor() {
   resetEnvelope();
   updateEditorDataUI();
   updateMaskEditorUI();
+  updateScrollLock();
   sizeMaskEditor();
 }
 
@@ -1295,23 +1485,49 @@ function closeMaskEditor() {
   editorAnimId++; // corta la animación si estaba en curso
   maskEditorOpen = false;
   maskEditorEl.classList.remove("open");
+  updateScrollLock();
   updateStepUI();
+  // En el teléfono, al cerrar la foto en grande se pasa a la etapa más
+  // avanzada que esté habilitada (silueta, poema o postal)
+  setMobileStep(3);
   drawPreview();
+}
+
+// En el computador el editor va sobre las postales (lado derecho); en el
+// teléfono va dentro del panel, bajo la barra de pasos, en lugar de la
+// etapa, así arriba siguen el título, las postales y los pasos
+function placeMaskEditor() {
+  if (!maskEditorEl) return;
+  if (isMobile()) {
+    const nav = document.getElementById("stepNav");
+    if (maskEditorEl.previousElementSibling !== nav) nav.after(maskEditorEl);
+  } else {
+    const below = document.getElementById("below");
+    if (maskEditorEl.parentElement !== below) below.appendChild(maskEditorEl);
+  }
 }
 
 // La foto ocupa lo más posible del lado derecho, sin deformarse
 function sizeMaskEditor() {
   if (!maskEditorOpen || !photoReady) return;
-  const below = document.getElementById("below");
-  const maxW = below.clientWidth * 0.7;
-  const maxH = below.clientHeight * 0.62;
+  let maxW, maxH;
+  if (isMobile()) {
+    // Todo el ancho del panel; de alto, lo justo para que quepan los botones
+    const panelEl = document.getElementById("panel");
+    maxW = panelEl.clientWidth - 32;
+    maxH = window.innerHeight * 0.42;
+  } else {
+    const area = viewerArea();
+    maxW = area.w * 0.7;
+    maxH = area.h * 0.62; // deja lugar para títulos y botones
+  }
   const ratio = originalImg.width / originalImg.height;
   const w = Math.floor(Math.min(maxW, maxH * ratio));
   const h = Math.floor(w / ratio);
   maskEditorCanvasEl.style.width = w + "px";
   maskEditorCanvasEl.style.height = h + "px";
   // Las letras del reverso escalan como en una postal 3:2 de este ancho
-  editorCardEl.style.setProperty("--h", Math.min(h, w / POSTCARD_RATIO) + "px");
+  editorCardEl.style.setProperty("--h", backTextHeight(w, h) + "px");
   if (editorPhase === "edit") {
     maskEditorFit = drawPhotoWithMask(maskEditorCanvasEl);
   } else {
@@ -1447,6 +1663,7 @@ function startPoemAnimation() {
   if (!maskReady || !maskImg || editorPhase !== "edit") return;
   const myId = ++editorAnimId;
   editorPhase = "anim";
+  silhouetteDone = true; // ya se puede ir al Poema
   updateMaskEditorUI();
   maskEditorHintEl.textContent = "Trazando las líneas…";
   animSegments = computeGridSegments();
@@ -1456,7 +1673,7 @@ function startPoemAnimation() {
   animateValue(GRID_ANIM_MS, myId, (t) => drawEditorFrame(t, 0), () => {
     const hasPoem = poemTextarea.value().trim().length > 0;
     if (!hasPoem) {
-      finishAnimation("Escribe tu poema en el panel y aparecerá sobre estas líneas. Toca para cerrar.");
+      finishAnimation(noPoemHint());
       return;
     }
     // Espera a que el poema esté armado (suele estar listo antes que la grilla)
@@ -1512,8 +1729,15 @@ function makeFinalRow(parent, onConfirm) {
 // Si la foto está abierta en grande (ya terminada la animación), lo que se
 // escribe en los renglones aparece ahí al tiro, sin volver a animar
 // Texto de ayuda bajo la foto, cuando ya terminó la animación
+// Cuando todavía no hay poema (en el teléfono el panel no se ve detrás)
+function noPoemHint() {
+  return isMobile()
+    ? "Escribe o pega tu poema bajo la foto: aparecerá sobre estas líneas."
+    : "Escribe tu poema en el panel y aparecerá sobre estas líneas. Toca para cerrar.";
+}
+
 function editorHint() {
-  if (!lastPoemLines.length) return "Escribe tu poema en el panel y aparecerá sobre estas líneas. Toca para cerrar.";
+  if (!lastPoemLines.length) return noPoemHint();
   if (!maskEditorFinalEl.classList.contains("confirmed")) return "Elige letra blanca o negra y toca Listo.";
   if (!editorDataComplete()) return ""; // arriba dice "Completa tus datos…"
   return "Toca la postal para darla vuelta. Toca fuera para cerrar.";
@@ -1677,12 +1901,14 @@ function setupStampDrag(stampEl) {
   stampEl.addEventListener("pointercancel", end);
 }
 
-// ---- El sobre: la postal se achica, sube el sobre, entra la postal,
-// se cierra y aparece el correo ----
+// ---- El sobre: la postal se achica, sube el sobre, la postal entra,
+// se hunde hasta quedar tapada por el bolsillo, se cierra la solapa y
+// aparece el correo ----
 const CARD_SHRINK_MS = 700;      // primero la postal se achica en su lugar
 const ENVELOPE_RISE_MS = 800;    // luego sube el sobre desde abajo
 const CARD_IN_MS = 900;          // la postal baja y entra al sobre
-const FLAP_CLOSE_MS = 700;       // la solapa se cierra
+const CARD_SINK_MS = 700;        // se hunde en el bolsillo hasta quedar tapada
+const FLAP_CLOSE_MS = 700;       // recién entonces se cierra la solapa
 let envelopeTimers = [];
 
 function playEnvelope() {
@@ -1690,8 +1916,19 @@ function playEnvelope() {
   const envLayers = maskEditorEl.querySelectorAll(".envelope"); // detrás y delante de la postal
   const env = envLayers[0];
   const card = editorCardEl;
-  const cardRect = card.getBoundingClientRect();
-  const boxRect = maskEditorEl.getBoundingClientRect();
+
+  // Desaparecen los botones y textos (primero, porque al irse la postal se
+  // corre de lugar y hay que medirla ya en su nueva posición)
+  maskEditorEl.classList.add("sending");
+
+  // Posiciones en la página (no en la pantalla): en el teléfono la página
+  // se desplaza hasta el sobre mientras tanto
+  const pageRect = (el) => {
+    const r = el.getBoundingClientRect();
+    return { left: r.left + window.scrollX, top: r.top + window.scrollY, width: r.width, height: r.height };
+  };
+  const cardRect = pageRect(card);
+  const boxRect = pageRect(maskEditorEl);
 
   // Tamaño del sobre: un poco más chico que la postal, abajo y al centro
   const envW = Math.min(cardRect.width * 0.72, boxRect.width * 0.7);
@@ -1701,11 +1938,23 @@ function playEnvelope() {
     layer.style.height = envH + "px";
   });
 
-  // Desaparecen los botones y textos
-  maskEditorEl.classList.add("sending");
+  // En el teléfono el sobre sube desde abajo del editor: se baja la página
+  // para que se vea todo (la postal y el sobre)
+  if (isMobile()) maskEditorEl.scrollIntoView({ behavior: "smooth", block: "end" });
+
   const later = (fn, ms) => envelopeTimers.push(setTimeout(fn, ms));
   const scale = Math.min((envW * 0.88) / cardRect.width, (envH * 0.86) / cardRect.height);
   const ease = "cubic-bezier(.45,.05,.35,1)";
+  const smallH = cardRect.height * scale; // alto de la postal ya achicada
+
+  // Lo que asoma bajo el borde de abajo del sobre se recorta, así parece
+  // que la postal está dentro del bolsillo (clip-path va en px de la postal
+  // sin achicar, por eso se divide por scale)
+  const clipBelow = (cardTop, envRect) => {
+    const pocketBottom = envRect.top + envRect.height * 0.97;
+    const sticksOut = Math.max(0, cardTop + smallH - pocketBottom);
+    return "inset(0 0 " + (sticksOut / scale) + "px 0)";
+  };
 
   // 1) La postal se achica en su lugar, al tamaño que cabe en el sobre
   requestAnimationFrame(() => {
@@ -1717,24 +1966,47 @@ function playEnvelope() {
   later(() => maskEditorEl.classList.add("env-up"), CARD_SHRINK_MS);
 
   // 3) La postal (ya chica) baja y entra al sobre, detrás del bolsillo
+  let dx = 0, dy = 0;
   later(() => {
-    const envRect = env.getBoundingClientRect();
-    const dx = (envRect.left + envRect.width / 2) - (cardRect.left + cardRect.width / 2);
-    const dy = (envRect.top + envRect.height * 0.55) - (cardRect.top + cardRect.height / 2);
-    card.style.transition = "transform " + CARD_IN_MS + "ms " + ease + ", opacity 0.2s 0.8s";
+    const envRect = pageRect(env);
+    dx = (envRect.left + envRect.width / 2) - (cardRect.left + cardRect.width / 2);
+    dy = (envRect.top + envRect.height * 0.55) - (cardRect.top + cardRect.height / 2);
+    const top = cardRect.top + cardRect.height / 2 + dy - smallH / 2;
+    card.style.transition = "transform " + CARD_IN_MS + "ms " + ease + ", clip-path " + CARD_IN_MS + "ms " + ease;
+    card.style.clipPath = clipBelow(top, envRect);
     card.style.transform = "translate(" + dx + "px, " + dy + "px) scale(" + scale + ")";
   }, CARD_SHRINK_MS + ENVELOPE_RISE_MS);
 
-  // 4) Se cierra la solapa
-  later(() => maskEditorEl.classList.add("env-closing"),
-    CARD_SHRINK_MS + ENVELOPE_RISE_MS + CARD_IN_MS);
-
-  // 5) Se descargan las dos fotos y aparece el mensaje con el correo
+  // 4) Se hunde hasta que su borde de arriba pasa bajo la "V" del bolsillo:
+  //    queda tapada entera
   later(() => {
-    savePortada();
-    setTimeout(saveContraportada, 300);
+    const envRect = pageRect(env);
+    const top = cardRect.top + cardRect.height / 2 + dy - smallH / 2;
+    const vBottom = envRect.top + envRect.height * 0.6; // punta de la "V" (56%) + un poco
+    const sink = Math.max(0, vBottom - top);
+    card.style.transition = "transform " + CARD_SINK_MS + "ms ease-in, clip-path " + CARD_SINK_MS + "ms ease-in";
+    card.style.clipPath = clipBelow(top + sink, envRect);
+    card.style.transform = "translate(" + dx + "px, " + (dy + sink) + "px) scale(" + scale + ")";
+  }, CARD_SHRINK_MS + ENVELOPE_RISE_MS + CARD_IN_MS);
+
+  // 5) Ya tapada, se cierra la solapa
+  later(() => {
+    card.style.opacity = "0"; // ya no se ve; así no se asoma por ningún lado
+    maskEditorEl.classList.add("env-closing");
+  }, CARD_SHRINK_MS + ENVELOPE_RISE_MS + CARD_IN_MS + CARD_SINK_MS + 100);
+
+  // 6) Se descargan las dos fotos y aparece el mensaje con el correo
+  // En el teléfono no se guardan solas: el menú para guardarlas en la
+  // galería necesita que la persona toque un botón ("Guardar en mis fotos")
+  later(() => {
+    const mobile = isMobile();
+    maskEditorEl.querySelector(".sent-save").style.display = mobile ? "" : "none";
+    maskEditorEl.querySelector(".share-note").textContent = mobile
+      ? "Guarda las dos fotos en tu galería y envíalas a ese correo. Esta postal podrá ser utilizada para la construcción de este sitio web."
+      : "Ya se descargaron en tu dispositivo. Esta postal podrá ser utilizada para la construcción de este sitio web.";
+    if (!mobile) saveBothSides();
     maskEditorEl.classList.add("sent");
-  }, CARD_SHRINK_MS + ENVELOPE_RISE_MS + CARD_IN_MS + FLAP_CLOSE_MS + 200);
+  }, CARD_SHRINK_MS + ENVELOPE_RISE_MS + CARD_IN_MS + CARD_SINK_MS + 100 + FLAP_CLOSE_MS + 200);
 }
 
 function resetEnvelope() {
@@ -1743,6 +2015,8 @@ function resetEnvelope() {
   maskEditorEl.classList.remove("sending", "env-up", "env-closing", "sent", "stamped");
   editorCardEl.style.transition = "";
   editorCardEl.style.transform = "";
+  editorCardEl.style.clipPath = "";
+  editorCardEl.style.opacity = "";
   if (editorBackEls) {
     editorBackEls.stampBox.classList.remove("stamped");
     editorBackEls.stampBox.textContent = "Estampilla";
@@ -1750,9 +2024,62 @@ function resetEnvelope() {
 }
 
 // ---- Guardar portada (foto + poema) y contraportada (reverso) ----
+// ---------------------------------------------------------------------
+// GUARDAR IMÁGENES
+// En el computador se descargan. En el teléfono se abre el menú de
+// compartir, que tiene "Guardar imagen" (así quedan en la galería de
+// fotos, no en Descargas) y también deja mandarlas por correo.
+// Ese menú solo se abre si la persona acaba de tocar un botón, por eso
+// todo aquí es inmediato (sin esperas antes de compartir).
+// ---------------------------------------------------------------------
+function canvasToFile(canvasEl, name, type) {
+  type = type || "image/jpeg";
+  const dataUrl = canvasEl.toDataURL(type, 0.92);
+  const bytes = atob(dataUrl.split(",")[1]);
+  const arr = new Uint8Array(bytes.length);
+  for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+  return new File([arr], name, { type });
+}
+
+function downloadFiles(files) {
+  files.forEach((file, i) => {
+    setTimeout(() => {
+      const url = URL.createObjectURL(file);
+      const link = document.createElement("a");
+      link.download = file.name;
+      link.href = url;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+    }, i * 300); // una tras otra, para que el navegador no bloquee la segunda
+  });
+}
+
+function saveImageFiles(files) {
+  const canShare = isMobile() && navigator.canShare && navigator.canShare({ files });
+  if (!canShare) { downloadFiles(files); return; }
+  navigator.share({ files }).catch((err) => {
+    // Si la persona cerró el menú, no se hace nada; si falló, se descarga
+    if (err && err.name !== "AbortError") downloadFiles(files);
+  });
+}
+
+function portadaFile() {
+  return canvasToFile(cnv.elt, "portada-" + Date.now() + ".jpg");
+}
+
+function contraportadaFile() {
+  return canvasToFile(drawBackCanvas(), "contraportada-" + Date.now() + ".jpg");
+}
+
+// Las dos juntas (en el teléfono, un solo menú para guardar ambas)
+function saveBothSides() {
+  if (appState !== "listo" || !photoReady) return;
+  saveImageFiles([portadaFile(), contraportadaFile()]);
+}
+
 function savePortada() {
   if (appState !== "listo") return;
-  saveCanvas(cnv, "portada-" + Date.now(), "jpg");
+  saveImageFiles([portadaFile()]);
 }
 
 // Dibuja el reverso como imagen, del mismo tamaño que la foto
@@ -1848,10 +2175,7 @@ function drawBackCanvas() {
 
 function saveContraportada() {
   if (!photoReady) return;
-  const link = document.createElement("a");
-  link.download = "contraportada-" + Date.now() + ".jpg";
-  link.href = drawBackCanvas().toDataURL("image/jpeg", 0.92);
-  link.click();
+  saveImageFiles([contraportadaFile()]);
 }
 
 function refreshLargeViews() {
@@ -1916,12 +2240,14 @@ function openResultViewer() {
   resultViewerImgEl.src = cnv.elt.toDataURL("image/jpeg", 0.92); // lo que se ve ahora en el resultado
   resultViewerOpen = true;
   resultViewerEl.classList.add("open");
+  updateScrollLock();
 }
 
 function closeResultViewer() {
   if (!resultViewerOpen) return;
   resultViewerOpen = false;
   resultViewerEl.classList.remove("open");
+  updateScrollLock();
 }
 
 // Pinta o borra un trazo entre dos puntos (en coordenadas del editor)
@@ -2013,6 +2339,114 @@ function updateStepUI() {
     const el = document.getElementById(id);
     if (el) el.classList.toggle("active", i + 1 === step);
   });
+  updateStepNav(step);
+  placePoemBox(step);
+}
+
+// En el teléfono, en la etapa del poema dentro del editor (tras "Listo" en
+// la silueta, hasta elegir la letra), el cuadro de renglones aparece justo
+// bajo la foto (la foto no se mueve): lo que escribes o pegas aparece de
+// inmediato sobre las líneas.
+// Fuera de esa etapa vuelve a su lugar en el panel.
+function placePoemBox(step) {
+  const poemBoxEl = document.getElementById("poemBox");
+  const colPoemEl = document.getElementById("colPoem");
+  if (!poemBoxEl || !colPoemEl) return;
+  const inEditor = isMobile() && maskEditorOpen && step === 2 && !!maskEditorEl;
+  if (inEditor) {
+    if (poemBoxEl.parentElement !== maskEditorEl) editorCardEl.after(poemBoxEl);
+  } else if (poemBoxEl.parentElement !== colPoemEl) {
+    colPoemEl.insertBefore(poemBoxEl, document.getElementById("poemPlasmar"));
+  }
+}
+
+// ---------------------------------------------------------------------
+// TELÉFONO: UNA ETAPA A LA VEZ
+// El panel muestra solo la etapa elegida (1 silueta, 2 poema, 3 retrato).
+// Avanza sola al cerrar la foto en grande, y también se puede tocar la
+// barra de pasos. Sin foto, solo se puede estar en la 1.
+// ---------------------------------------------------------------------
+let mobileStep = 1;
+
+function setMobileStep(n) {
+  mobileStep = clampStep(n);
+  updateStepUI();
+  // Lo que estaba escondido medía 0: se vuelve a dibujar a su tamaño
+  layoutBoxes();
+  drawPreview();
+}
+
+// Un paso de la barra: si el editor está abierto, primero se cierra
+// En el teléfono, con foto, volver a "Retrato" abre el editor con sus
+// botones (Cambiar autorretrato, Pintar, Borrar, Listo), y volver a
+// "Postal" (con el retrato listo) abre la postal con los datos y los
+// botones para guardar. "Poema" muestra los renglones para escribir.
+function goToStep(n) {
+  if (!stepAllowed(n)) return; // todavía no: falta terminar la etapa anterior
+  if (maskEditorOpen) closeMaskEditor();
+  if (isMobile() && photoReady) {
+    if (n === 1) { setMobileStep(1); openMaskEditor(); return; }
+    if (n === 3 && portraitReady()) { setMobileStep(3); openPostcardStep(); return; }
+  }
+  setMobileStep(n);
+}
+
+// Solo se avanza en la barra cuando la etapa anterior está lista:
+// al Poema, tras tocar "Listo" en la silueta; a la Postal, tras elegir la
+// letra y tocar "Listo" (con el retrato terminado). Volver atrás, siempre.
+let silhouetteDone = false;
+let letterDone = false;
+
+function stepAllowed(n) {
+  if (n === 1) return true;
+  if (n === 2) return photoReady && silhouetteDone;
+  return photoReady && silhouetteDone && letterDone && portraitReady();
+}
+
+// La etapa más avanzada a la que se puede llegar (sin pasarse de n)
+function clampStep(n) {
+  while (n > 1 && !stepAllowed(n)) n--;
+  return n;
+}
+
+function portraitReady() {
+  return maskReady && !!maskImg && appState === "listo" && lastPoemLines.length > 0;
+}
+
+// Abre el editor directo en la postal ya terminada, sin repetir la animación
+function openPostcardStep() {
+  openMaskEditor();
+  editorAnimId++;                        // por si quedaba alguna animación
+  animSegments = computeGridSegments();
+  animLines = lastPoemLines;
+  editorPhase = "done";
+  drawEditorFrame(1, 1);
+  maskEditorEl.classList.add("done");
+  maskEditorFinalEl.classList.add("confirmed"); // la letra ya se eligió antes
+  fillEditorBack();
+  editorCardEl.classList.add("flipped");        // muestra el reverso con los datos
+  updateEditorDataUI();
+  maskEditorHintEl.textContent = editorHint();
+  updateMaskEditorUI();
+}
+
+// editorStep: la etapa en que va el editor (1 silueta, 2 poema, 3 postal),
+// para marcarla en la barra mientras está abierto
+function updateStepNav(editorStep) {
+  const panelEl = document.getElementById("panel");
+  if (!panelEl) return;
+  mobileStep = clampStep(mobileStep);
+  // Con el editor abierto en el teléfono, se esconden las etapas y queda él
+  const inlineEditor = maskEditorOpen && isMobile();
+  panelEl.dataset.step = inlineEditor ? "editor" : mobileStep;
+  const current = inlineEditor && editorStep ? editorStep : mobileStep;
+  document.querySelectorAll(".step-tab").forEach((tab) => {
+    const n = Number(tab.dataset.step);
+    tab.classList.toggle("current", n === current);
+    tab.disabled = !stepAllowed(n);
+  });
+  const plasmar = document.getElementById("poemPlasmar");
+  if (plasmar) plasmar.disabled = !(maskReady && poemTextarea.value().trim().length > 0);
 }
 
 function refreshSaveButton() {
@@ -2068,8 +2502,7 @@ function updateColorButtonsUI() {
 // Descarga la imagen final (foto + poema)
 function onSaveClick() {
   if (appState !== "listo") return;
-  const filename = "retrato-poema-" + Date.now();
-  saveCanvas(cnv, filename, "png");
+  saveImageFiles([canvasToFile(cnv.elt, "retrato-poema-" + Date.now() + ".png", "image/png")]);
 }
 
 // ---------------------------------------------------------------------
@@ -2103,8 +2536,7 @@ async function copyShareData() {
 
 // Descarga portada y contraportada en JPG (pesan menos para el correo)
 function downloadPostcardForEmail() {
-  savePortada();
-  setTimeout(saveContraportada, 300);
+  saveBothSides();
 }
 
 // Arma la ventanita para enviar la postal (queda escondida hasta usarla)
