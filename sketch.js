@@ -957,6 +957,22 @@ function injectStyles() {
       letter-spacing: 0.06em; color: #888888;
     }
     .pc-value { min-width: 0; overflow-wrap: anywhere; } /* si no cabe, pasa a otra línea */
+    /* Teléfono sin menú de compartir: fotos para guardar a mano */
+    #saveSheet {
+      position: fixed; inset: 0; z-index: 60; display: none;
+      flex-direction: column; align-items: center; gap: 12px;
+      background: #F3EDDC; overflow-y: auto; padding: 28px 16px 32px; text-align: center;
+    }
+    #saveSheet.open { display: flex; }
+    .save-sheet-title { margin: 0; font-size: 20px; font-weight: 600; color: #B5543A; }
+    .save-sheet-hint { margin: 0; font-size: 14px; line-height: 1.45; color: #555555; max-width: 360px; }
+    .save-sheet-images { display: flex; flex-direction: column; gap: 14px; width: 100%; align-items: center; }
+    .save-sheet-images img {
+      display: block; max-width: 100%; height: auto; border-radius: 4px;
+      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15);
+      -webkit-touch-callout: default; /* deja el menú de mantener presionado en iPhone */
+    }
+    .save-sheet-close { width: min(260px, 100%); flex-shrink: 0; }
 
     /* Solo en el teléfono: barra de pasos y botón "Plasmar poema" */
     .mobile-only { display: none; }
@@ -2055,12 +2071,50 @@ function downloadFiles(files) {
 }
 
 function saveImageFiles(files) {
-  const canShare = isMobile() && navigator.canShare && navigator.canShare({ files });
-  if (!canShare) { downloadFiles(files); return; }
+  if (!isMobile()) { downloadFiles(files); return; }
+  let canShare = false;
+  try { canShare = !!(navigator.canShare && navigator.canShare({ files })); } catch (err) { /* sin menú */ }
+  // Sin menú de compartir (por ejemplo, dentro de Instagram o WhatsApp, o
+  // sin https) se muestran las fotos para guardarlas manteniéndolas presionadas
+  if (!canShare) { showSaveSheet(files); return; }
   navigator.share({ files }).catch((err) => {
-    // Si la persona cerró el menú, no se hace nada; si falló, se descarga
-    if (err && err.name !== "AbortError") downloadFiles(files);
+    // Si la persona cerró el menú, no se hace nada; si falló, se muestran las fotos
+    if (err && err.name !== "AbortError") showSaveSheet(files);
   });
+}
+
+// Respaldo en el teléfono: las fotos en grande, para mantenerlas
+// presionadas y elegir "Guardar en Fotos" / "Descargar imagen"
+let saveSheetEl = null;
+function showSaveSheet(files) {
+  if (!saveSheetEl) {
+    saveSheetEl = document.createElement("div");
+    saveSheetEl.id = "saveSheet";
+    saveSheetEl.innerHTML = `
+      <p class="save-sheet-title">Guarda tus fotos</p>
+      <p class="save-sheet-hint">Mantén presionada cada foto y elige <strong>Guardar en Fotos</strong> (o <strong>Descargar imagen</strong>).</p>
+      <div class="save-sheet-images"></div>
+      <button class="primary-btn save-sheet-close">Listo</button>`;
+    document.body.appendChild(saveSheetEl);
+    saveSheetEl.querySelector(".save-sheet-close").addEventListener("click", () => {
+      saveSheetEl.classList.remove("open");
+      saveSheetEl.querySelectorAll("img").forEach((img) => URL.revokeObjectURL(img.src));
+      saveSheetEl.querySelector(".save-sheet-images").innerHTML = "";
+      document.body.classList.toggle("viewer-open", false);
+      updateScrollLock();
+    });
+  }
+  const box = saveSheetEl.querySelector(".save-sheet-images");
+  box.innerHTML = "";
+  for (const file of files) {
+    const img = document.createElement("img");
+    img.src = URL.createObjectURL(file);
+    img.alt = file.name;
+    box.appendChild(img);
+  }
+  saveSheetEl.classList.add("open");
+  saveSheetEl.scrollTop = 0;
+  document.body.classList.add("viewer-open");
 }
 
 function portadaFile() {
