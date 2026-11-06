@@ -870,6 +870,9 @@ function injectStyles() {
       text-align: center; max-width: min(560px, 90%);
     }
     #maskEditor.step3:not(.data-ok):not(.sending) .complete-prompt { display: block; }
+    /* En el teléfono el aviso se divide: arriba "Completa tus datos…",
+       abajo de la postal "Guardar tus resultados" (hasta que aparece el botón) */
+    .save-prompt { display: none; font-size: 14px; font-weight: 600; color: #B5543A; text-align: center; }
     .pc-stamp.drop-over { border-color: #B5543A; background: rgba(181, 84, 58, 0.08); }
     /* Pegada: la estampilla mantiene su tamaño, centrada en el recuadro */
     .pc-stamp.stamped { border-color: transparent; font-size: inherit; }
@@ -892,6 +895,7 @@ function injectStyles() {
     .final-block.confirmed .color-row { display: none; } /* tras "Listo" se reemplaza por guardar/enviar */
     .final-row, .final-block:not(.confirmed) .final-row.ready { display: none; }
     .final-row .primary-btn { flex: 1; width: auto; }
+    .final-row .final-both { display: none; } /* solo en el teléfono */
     .final-row.ready { display: flex; }
     #maskEditor:not(.done) .final-block { display: none; }
     #maskEditor.done .mask-editor-tools { display: none; } /* en su lugar van guardar/enviar */
@@ -1059,9 +1063,14 @@ function injectStyles() {
       .primary-btn, .toggle-btn { min-height: 42px; font-size: 13px; }
       .mask-editor-hint, #postcardHint { padding: 0 16px; text-align: center; }
 
+      /* Terminada la postal, un solo botón que guarda las dos fotos */
+      .final-row .final-save, .final-row .final-back { display: none; }
+      .final-row .final-both { display: block; }
       /* Sin estampilla ni sobre en el teléfono: la postal solo se guarda */
       #maskEditor.data-ok .stamp-offer { display: none; }
       .complete-prompt { padding: 0 16px; max-width: 100%; }
+      .complete-prompt .cp-rest { display: none; }
+      #maskEditor.step3:not(.data-ok):not(.sending) .save-prompt { display: block; }
       .stamp-offer-title { font-size: 19px; }
       .stamp-offer-row { gap: 10px; }
       .sent-message { width: calc(100% - 32px); top: 6%; }
@@ -1366,7 +1375,7 @@ function buildMaskEditor() {
   maskEditorEl.id = "maskEditor";
   // La foto es el frente de una postal; en la etapa 3 gira y muestra el reverso
   maskEditorEl.innerHTML = `
-    <div class="complete-prompt">Completa tus datos para terminar tu postal y guardar tus resultados</div>
+    <div class="complete-prompt">Completa tus datos para terminar tu postal<span class="cp-rest"> y guardar tus resultados</span></div>
     <div class="stamp-offer">
       <div class="stamp-offer-title">¿Quieres que tu postal sea parte de esta web?</div>
       <div class="stamp-offer-row">
@@ -1380,6 +1389,7 @@ function buildMaskEditor() {
         <div class="postcard-face postcard-back" id="editorBack"></div>
       </div>
     </div>
+    <div class="save-prompt">Guardar tus resultados</div>
     <div class="btn-row mask-editor-tools">
       <button class="toggle-btn" id="maskChange">Cambiar autorretrato</button>
       <button class="toggle-btn" id="maskPaint">Pintar</button>
@@ -1724,6 +1734,7 @@ function makeFinalRow(parent, onConfirm) {
     <div class="btn-row final-row">
       <button class="primary-btn final-save">Guardar portada</button>
       <button class="primary-btn final-back">Guardar contraportada</button>
+      <button class="primary-btn final-both">Guardar las fotos</button>
     </div>`;
   const white = block.querySelector(".final-white");
   const black = block.querySelector(".final-black");
@@ -1737,6 +1748,7 @@ function makeFinalRow(parent, onConfirm) {
   });
   block.querySelector(".final-save").addEventListener("click", savePortada);
   block.querySelector(".final-back").addEventListener("click", saveContraportada);
+  block.querySelector(".final-both").addEventListener("click", saveBothSides); // en el teléfono, un solo botón
   parent.appendChild(block);
   const row = block.querySelector(".final-row");
   finalRows.push(row);
