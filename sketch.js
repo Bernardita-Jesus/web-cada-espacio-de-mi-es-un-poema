@@ -1059,7 +1059,9 @@ function injectStyles() {
       .primary-btn, .toggle-btn { min-height: 42px; font-size: 13px; }
       .mask-editor-hint, #postcardHint { padding: 0 16px; text-align: center; }
 
-      .complete-prompt, .stamp-offer { padding: 0 16px; max-width: 100%; }
+      /* Sin estampilla ni sobre en el teléfono: la postal solo se guarda */
+      #maskEditor.data-ok .stamp-offer { display: none; }
+      .complete-prompt { padding: 0 16px; max-width: 100%; }
       .stamp-offer-title { font-size: 19px; }
       .stamp-offer-row { gap: 10px; }
       .sent-message { width: calc(100% - 32px); top: 6%; }
