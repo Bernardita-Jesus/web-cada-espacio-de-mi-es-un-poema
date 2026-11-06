@@ -577,6 +577,10 @@ function injectStyles() {
       background: rgba(181, 84, 58, 0.12); /* terracota muy suave */
     }
     .step-card.active .field-label { color: #B5543A; }
+    /* Títulos de sección iguales a la barra del teléfono: "1 Retrato", "2 Poema", "3 Postal" */
+    .step-card .field-label { display: flex; align-items: center; gap: 8px; }
+    .step-card .field-label .step-num { width: 22px; height: 22px; font-size: 12px; }
+    .step-card.active .field-label .step-num { background: #B5543A; color: #FFFFFF; }
     .col > * { flex-shrink: 0; }
     #title {
       font-size: 26px; font-weight: 600; line-height: 1.25; margin: 0;
@@ -1037,8 +1041,8 @@ function injectStyles() {
       #panel[data-step="3"] #colResult { display: flex; }
       .step-card.active { background: transparent; } /* ya se distingue por estar sola */
       .step-card .field-label { color: #B5543A; text-align: center; }
-      /* sin "Silueta de autorretrato" ni "Poema plasmado": la barra ya dice en qué paso vas */
-      #colPhoto .field-label, #colPoem .field-label { display: none; }
+      /* sin títulos de sección: la barra de pasos ya dice en qué paso vas */
+      .step-card .field-label { display: none; }
       #poemPlasmar {
         width: min(260px, 100%); align-self: center; margin-top: 6px;
         align-items: center; justify-content: center; /* texto centrado (es flex por .mobile-only) */
@@ -1118,7 +1122,7 @@ function buildInterface() {
 
   // Vista previa: la foto con la zona detectada como retrato marcada.
   // El mismo recuadro sirve para subir (o cambiar) el autorretrato.
-  createDiv("Silueta de autorretrato").addClass("field-label").parent(colPhoto);
+  createDiv('<span class="step-num">1</span>Retrato').addClass("field-label").parent(colPhoto);
   const previewSlot = createDiv().id("previewSlot").parent(colPhoto);
   const previewBox = createDiv().id("previewBox").parent(previewSlot);
   previewBox.attribute("role", "button");
@@ -1147,7 +1151,7 @@ function buildInterface() {
   // Sección 3: poema + color de la letra
   const colPoem = createDiv().id("colPoem").addClass("col step-card").parent(panel);
 
-  createDiv("Poema plasmado").addClass("field-label").parent(colPoem);
+  createDiv('<span class="step-num">2</span>Poema').addClass("field-label").parent(colPoem);
 
   // Los renglones van dentro de un cuadro hueso con esquinas, como los otros
   const poemBox = createDiv().id("poemBox").parent(colPoem);
@@ -1176,7 +1180,7 @@ function buildInterface() {
   // Sección 4: resultado final (se genera solo) + guardar
   const colResult = createDiv().id("colResult").addClass("col step-card").parent(panel);
 
-  createDiv("Retrato plasmado de poesía").addClass("field-label").parent(colResult);
+  createDiv('<span class="step-num">3</span>Postal').addClass("field-label").parent(colResult);
 
   // Zona donde se muestra el resultado final
   const stage = createDiv().id("stage").parent(colResult);
