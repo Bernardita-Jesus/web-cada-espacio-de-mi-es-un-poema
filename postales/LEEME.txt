@@ -44,6 +44,11 @@ Cuando alguien te envíe su postal por correo:
    - Opcional: "color" es el color de la parte de atrás de la postal,
      por ejemplo "#DDF1EE" (turquesa clarito). Conviene usar tonos
      suaves para que el texto se lea bien. Sin "color", queda hueso.
+   - Opcional: "posicion" es qué parte de la foto se ve en la postal
+     chica de la galería, de 0 (se ve la parte de arriba) a 100 (se ve
+     la parte de abajo). Si a una foto se le corta el texto abajo, súbela
+     con un número más alto, por ejemplo "posicion": 75. Sin "posicion"
+     queda en 40.
    - Si una postal no tiene datos en postales.json, igual se muestra,
      solo que sin nombre ni poema en el reverso.
 

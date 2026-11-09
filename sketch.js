@@ -304,6 +304,12 @@ function buildPostcards() {
       // Obra real, cada una una sola vez
       const entry = galleryEntries[i];
       el.style.backgroundImage = `url("postales/${encodeURI(entry.imagen)}")`;
+      // Opcional: qué parte de la foto se ve en la postal chica (de 0 = arriba
+      // a 100 = abajo). Más alto = la foto sube y se ve más de la parte de abajo
+      const pos = Number(entry.posicion);
+      if (entry.posicion !== undefined && isFinite(pos)) {
+        el.style.backgroundPosition = "center " + Math.max(0, Math.min(100, pos)) + "%";
+      }
       el.postcardData = {
         number: entry.numero,
         image: "postales/" + entry.imagen,
