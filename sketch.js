@@ -2184,18 +2184,25 @@ function canvasToFile(canvasEl, name, type) {
   return new File([arr], name, { type });
 }
 
+const DOWNLOAD_GAP_MS = 800; // pausa entre una descarga y la siguiente
+
 function downloadFiles(files) {
-  // Todas de inmediato, mientras dura el clic de la persona: con esperas
-  // entre ellas, el navegador bloquea las que vienen después de la primera
-  files.forEach((file) => {
-    const url = URL.createObjectURL(file);
-    const link = document.createElement("a");
-    link.download = file.name;
-    link.href = url;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  // Una y luego la otra: la primera al tiro (dentro del clic) y las
+  // siguientes con una pausa corta. La primera vez Chrome puede preguntar
+  // si se permite descargar varios archivos.
+  files.forEach((file, i) => {
+    const download = () => {
+      const url = URL.createObjectURL(file);
+      const link = document.createElement("a");
+      link.download = file.name;
+      link.href = url;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+    };
+    if (i === 0) download();
+    else setTimeout(download, i * DOWNLOAD_GAP_MS);
   });
 }
 
