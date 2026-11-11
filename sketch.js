@@ -614,11 +614,11 @@ function injectStyles() {
     }
     .primary-btn {
       display: block; width: 100%; text-align: center;
-      padding: 10px 14px; background: #555555; color: #FFFFFF;
+      padding: 10px 14px; background: #7B5B45; color: #FFFFFF; /* café, como los textos de ayuda */
       border: none; border-radius: 5px; font-size: 13px; font-weight: 600;
       cursor: pointer; font-family: inherit;
     }
-    .primary-btn:hover:not(:disabled) { background: #333333; }
+    .primary-btn:hover:not(:disabled) { background: #5E4433; }
     .primary-btn:disabled { opacity: 0.4; cursor: not-allowed; }
     /* Los dos recuadros (vista previa y resultado) miden lo mismo:
        layoutBoxes() les da el mismo tamaño desde JavaScript */
@@ -672,20 +672,20 @@ function injectStyles() {
     .toggle-btn {
       flex: 1;
       padding: 8px 10px;
-      background: #DADADA;
-      border: 1px solid #DADADA;
+      background: #E6D9CC;          /* café clarito */
+      border: 1px solid #E6D9CC;
       border-radius: 5px;
       font-size: 12px;
       font-weight: 600;
-      color: #333333;
+      color: #5E4433;
       cursor: pointer;
       font-family: inherit;
       transition: background 0.15s, border-color 0.15s, color 0.15s;
     }
-    .toggle-btn:hover { border-color: #888888; }
+    .toggle-btn:hover { border-color: #7B5B45; }
     .toggle-btn-active {
-      background: #888888;
-      border-color: #888888;
+      background: #7B5B45;
+      border-color: #7B5B45;
       color: #FFFFFF;
     }
     #previewSlot {
@@ -804,18 +804,18 @@ function injectStyles() {
       border-bottom: 1.5px solid #B5543A;
       border-radius: 3px 3px 0 0;
       padding-left: 0.35em; padding-right: 0.35em;
-      animation: pc-missing-glow 2.4s ease-in-out infinite;
+      animation: pc-missing-glow 1.1s ease-in-out infinite;
     }
     #maskEditor.step3 .pc-missing .pc-label { color: #B5543A; }
     #maskEditor.step3 .pc-missing .pc-input::placeholder,
     #maskEditor.step3 .pc-missing .pc-date-text.empty { color: #C98A78; }
     #maskEditor.step3 .pc-author-row.pc-missing { padding-top: 0.3em; padding-bottom: 0.2em; }
     @keyframes pc-missing-glow {
-      0%, 100% { background-color: rgba(181, 84, 58, 0.06); }
-      50% { background-color: rgba(181, 84, 58, 0.16); }
+      0%, 100% { background-color: rgba(181, 84, 58, 0.03); border-bottom-color: rgba(181, 84, 58, 0.35); }
+      50% { background-color: rgba(181, 84, 58, 0.30); border-bottom-color: #B5543A; }
     }
     /* Tocaron "Descargar postal" sin rellenar todo: los que faltan tiemblan */
-    #maskEditor.nudge .pc-missing { animation: pc-missing-shake 0.45s ease-in-out, pc-missing-glow 2.4s ease-in-out infinite 0.45s; }
+    #maskEditor.nudge .pc-missing { animation: pc-missing-shake 0.45s ease-in-out, pc-missing-glow 1.1s ease-in-out infinite 0.45s; }
     @keyframes pc-missing-shake {
       0%, 100% { transform: translateX(0); }
       25% { transform: translateX(-4px); }
@@ -879,16 +879,15 @@ function injectStyles() {
     #maskEditor.sending .mask-editor-tools { display: none !important; }
     /* Mensaje final, arriba del sobre */
     .sent-message {
-      display: none; max-width: min(460px, 90%); text-align: center;
+      display: none; max-width: min(620px, 92%); text-align: center;
       color: #444444; font-size: 14px; line-height: 1.5;
       position: absolute; top: 12%; left: 50%; transform: translateX(-50%);
     }
     .sent-message p { margin: 0 0 10px; }
     .sent-message .sent-copy, .sent-message .sent-save { width: auto; display: inline-block; padding: 9px 22px; margin: 0 4px 12px; }
-    .sent-message .sent-save { background: #B5543A; } /* lo primero que hay que hacer */
     /* Título del mensaje final, como el título de la página */
     .sent-message .sent-details { margin-top: 96px; } /* más abajo, separado del título */
-    .sent-message .sent-question { margin: 0 0 14px; font-size: 40px; font-weight: 600; line-height: 1.15; color: #2FB5A8; } /* turquesa, como la estampilla del sobre */
+    .sent-message .sent-question { margin: 0 0 14px; font-size: 40px; font-weight: 600; line-height: 1.15; color: #2FB5A8; white-space: nowrap; } /* siempre en dos líneas */ /* turquesa, como la estampilla del sobre */
     /* "Postales descargadas": estampilla turquesa que se pega en el sobre
        ya cerrado (mismo borde perforado que las otras) */
     .sent-stamp {
@@ -922,6 +921,37 @@ function injectStyles() {
       position: absolute; left: 0; bottom: 0; width: 1px; height: 1px;
       opacity: 0; pointer-events: none; border: 0; padding: 0;
     }
+    /* Calendario propio (el del navegador no deja cambiar sus colores): café */
+    .pc-calendar {
+      position: fixed; z-index: 70; display: none; width: 264px;
+      background: #FBF7F0; border: 1px solid #E6D9CC; border-radius: 8px;
+      box-shadow: 0 10px 30px rgba(94, 68, 51, 0.22);
+      padding: 12px; color: #5E4433; font-size: 13px; user-select: none;
+    }
+    .pc-calendar.open { display: block; }
+    .cal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+    .cal-title { font-weight: 600; font-size: 14px; }
+    .cal-nav {
+      width: 30px; height: 30px; border: none; border-radius: 50%; background: none;
+      color: #7B5B45; font-size: 18px; line-height: 1; cursor: pointer;
+    }
+    .cal-nav:hover { background: #E6D9CC; }
+    .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; text-align: center; }
+    .cal-wd { font-size: 11px; font-weight: 600; color: #A08670; padding: 4px 0; }
+    .cal-day {
+      height: 32px; border: none; border-radius: 50%; background: none;
+      font: inherit; color: #5E4433; cursor: pointer; padding: 0;
+    }
+    .cal-day:hover { background: #E6D9CC; }
+    .cal-day.other { color: #C4B3A3; }
+    .cal-day.today { box-shadow: inset 0 0 0 1px #7B5B45; }
+    .cal-day.selected { background: #7B5B45; color: #FFFFFF; }
+    .cal-foot { display: flex; justify-content: space-between; margin-top: 8px; }
+    .cal-foot button {
+      border: none; background: none; padding: 4px 6px; border-radius: 4px;
+      font: inherit; font-weight: 600; color: #7B5B45; cursor: pointer;
+    }
+    .cal-foot button:hover { background: #E6D9CC; }
     /* Arriba, en la etapa 3 hasta completar los datos */
     .complete-prompt {
       display: none; font-size: 24px; font-weight: 600; line-height: 1.2; color: #B5543A; /* como el título de la página */
@@ -951,7 +981,7 @@ function injectStyles() {
     #maskEditor:not(.done) .final-block { display: none; }
     #maskEditor.done .mask-editor-tools { display: none; } /* en su lugar van guardar/enviar */
     .mask-editor-tools .primary-btn { flex: 1; width: auto; }
-    .mask-editor-hint { font-size: 12px; color: #666666; }
+    .mask-editor-hint { font-size: 12px; color: #7B5B45; } /* café */
     /* Visor: la postal tocada, en grande y centrada en el lado derecho */
     #postcardViewer {
       position: absolute; inset: 0; z-index: 10;
@@ -962,7 +992,7 @@ function injectStyles() {
     }
     #postcardViewer.open { display: flex; animation: viewer-in 0.2s ease-out; }
     @keyframes viewer-in { from { opacity: 0; } to { opacity: 1; } }
-    #postcardHint { font-size: 12px; color: #666666; }
+    #postcardHint { font-size: 12px; color: #7B5B45; } /* café */
     /* La postal grande tiene dos caras y gira al tocarla */
     .postcard-large { perspective: 1600px; cursor: pointer; }
     .postcard-inner {
@@ -1120,7 +1150,7 @@ function injectStyles() {
 
       .complete-prompt { padding: 0 16px; max-width: 100%; font-size: 19px; }
       .sent-message { width: calc(100% - 32px); top: 6%; }
-      .sent-message .sent-question { font-size: 28px; }
+      .sent-message .sent-question { font-size: min(28px, 6.4vw); } /* las dos líneas caben en el teléfono */
       #resultViewer img { max-width: 92%; max-height: 70%; }
     }
   `;
@@ -1422,7 +1452,7 @@ function buildMaskEditor() {
   maskEditorEl.id = "maskEditor";
   // La foto es el frente de una postal; en la etapa 3 gira y muestra el reverso
   maskEditorEl.innerHTML = `
-    <div class="complete-prompt">Rellena tus datos</div>
+    <div class="complete-prompt">¡Rellena tus datos!</div>
     <div class="postcard-large editor-card">
       <div class="postcard-inner">
         <div class="editor-front"><canvas id="maskEditorCanvas"></canvas></div>
@@ -1446,7 +1476,7 @@ function buildMaskEditor() {
       <div class="sent-stamp"><div class="sent-stamp-inner">Postales<br>descargadas</div></div>
     </div>
     <div class="sent-message">
-      <p class="sent-question">¿Quieres que tu postal forme parte de esta web?</p>
+      <p class="sent-question">¿Quieres que tu postal<br>forme parte de esta web?</p>
       <div class="sent-details">
         <p>Envíala a este correo (la <strong>portada</strong> y la <strong>contraportada</strong>):</p>
         <p class="share-email">${SHARE_EMAIL}</p>
@@ -1505,7 +1535,11 @@ function buildMaskEditor() {
     }
     if (e.target === maskEditorEl || editorPhase === "done") closeMaskEditor();
   });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && maskEditorOpen) closeMaskEditor(); });
+  document.addEventListener("keydown", (e) => {
+    // Con el calendario abierto, Esc solo cierra el calendario
+    if (calendarEl && calendarEl.classList.contains("open")) return;
+    if (e.key === "Escape" && maskEditorOpen) closeMaskEditor();
+  });
   setupMaskBrush();
 }
 
@@ -1549,6 +1583,7 @@ function openMaskEditor() {
 
 function closeMaskEditor() {
   if (!maskEditorOpen) return;
+  closeCalendar();
   editorAnimId++; // corta la animación si estaba en curso
   maskEditorOpen = false;
   maskEditorEl.classList.remove("open");
@@ -1880,9 +1915,101 @@ function buildEditorBack(backEl) {
   // La fecha se ve escrita con palabras; tocar la línea abre el calendario
   els.date.parentElement.addEventListener("click", (e) => {
     e.preventDefault();
-    try { els.date.showPicker(); } catch (err) { els.date.focus(); }
+    if (calendarEl && calendarEl.classList.contains("open")) closeCalendar();
+    else openCalendar(els.date, els.date.parentElement);
   });
   return els;
+}
+
+// ---- Calendario propio, en café ----
+// Escribe la fecha elegida en el input escondido (como "2026-11-11")
+let calendarEl = null, calendarInput = null, calendarAnchor = null, calendarMonth = null;
+const CAL_WEEKDAYS = ["L", "M", "M", "J", "V", "S", "D"];
+const isoDate = (d) => d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+
+function buildCalendar() {
+  calendarEl = document.createElement("div");
+  calendarEl.className = "pc-calendar";
+  calendarEl.innerHTML = `
+    <div class="cal-head">
+      <button class="cal-nav cal-prev" aria-label="Mes anterior">‹</button>
+      <span class="cal-title"></span>
+      <button class="cal-nav cal-next" aria-label="Mes siguiente">›</button>
+    </div>
+    <div class="cal-grid"></div>
+    <div class="cal-foot">
+      <button class="cal-clear">Borrar</button>
+      <button class="cal-today">Hoy</button>
+    </div>`;
+  document.body.appendChild(calendarEl);
+  const shift = (n) => {
+    calendarMonth = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + n, 1);
+    renderCalendar();
+  };
+  calendarEl.querySelector(".cal-prev").addEventListener("click", () => shift(-1));
+  calendarEl.querySelector(".cal-next").addEventListener("click", () => shift(1));
+  calendarEl.querySelector(".cal-clear").addEventListener("click", () => pickCalendarDate(""));
+  calendarEl.querySelector(".cal-today").addEventListener("click", () => pickCalendarDate(isoDate(new Date())));
+  // Tocar fuera (o Esc) lo cierra; también si la página se mueve
+  document.addEventListener("pointerdown", (e) => {
+    if (!calendarEl.classList.contains("open")) return;
+    if (calendarEl.contains(e.target) || calendarAnchor.contains(e.target)) return;
+    closeCalendar();
+  });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeCalendar(); });
+  window.addEventListener("resize", closeCalendar);
+  window.addEventListener("scroll", closeCalendar, true);
+}
+
+function openCalendar(input, anchor) {
+  if (!calendarEl) buildCalendar();
+  calendarInput = input;
+  calendarAnchor = anchor;
+  const [y, m] = input.value ? input.value.split("-").map(Number) : [];
+  const base = input.value ? new Date(y, m - 1, 1) : new Date();
+  calendarMonth = new Date(base.getFullYear(), base.getMonth(), 1);
+  renderCalendar();
+  calendarEl.classList.add("open");
+  // Arriba de la línea de la fecha si cabe; si no, debajo
+  const r = anchor.getBoundingClientRect();
+  const w = calendarEl.offsetWidth, h = calendarEl.offsetHeight;
+  const top = r.top - h - 8 >= 8 ? r.top - h - 8 : Math.min(r.bottom + 8, window.innerHeight - h - 8);
+  const left = Math.max(8, Math.min(r.left, window.innerWidth - w - 8));
+  calendarEl.style.top = top + "px";
+  calendarEl.style.left = left + "px";
+}
+
+function closeCalendar() {
+  if (calendarEl) calendarEl.classList.remove("open");
+}
+
+function renderCalendar() {
+  const y = calendarMonth.getFullYear(), m = calendarMonth.getMonth();
+  const title = calendarMonth.toLocaleDateString("es-CL", { month: "long", year: "numeric" });
+  calendarEl.querySelector(".cal-title").textContent = title.charAt(0).toUpperCase() + title.slice(1);
+  const grid = calendarEl.querySelector(".cal-grid");
+  grid.innerHTML = CAL_WEEKDAYS.map((d) => `<span class="cal-wd">${d}</span>`).join("");
+  // Parte el lunes de la semana del día 1; siempre 6 semanas
+  const offset = (new Date(y, m, 1).getDay() + 6) % 7;
+  const today = isoDate(new Date());
+  for (let i = 0; i < 42; i++) {
+    const d = new Date(y, m, 1 - offset + i);
+    const iso = isoDate(d);
+    const btn = document.createElement("button");
+    btn.className = "cal-day";
+    btn.textContent = d.getDate();
+    if (d.getMonth() !== m) btn.classList.add("other");
+    if (iso === today) btn.classList.add("today");
+    if (iso === calendarInput.value) btn.classList.add("selected");
+    btn.addEventListener("click", () => pickCalendarDate(iso));
+    grid.appendChild(btn);
+  }
+}
+
+function pickCalendarDate(iso) {
+  calendarInput.value = iso;
+  calendarInput.dispatchEvent(new Event("change"));
+  closeCalendar();
 }
 
 // Los datos escritos atrás (la fecha ya con su estación)
@@ -1928,6 +2055,7 @@ function fillEditorBack() {
 // sobre y se descarga ----
 function downloadPostcard() {
   if (!isEditorStep3() || maskEditorEl.classList.contains("sending")) return;
+  closeCalendar();
   if (!editorDataComplete()) {
     // Faltan datos: se muestra el reverso y parpadean los que faltan
     editorCardEl.classList.add("flipped");
