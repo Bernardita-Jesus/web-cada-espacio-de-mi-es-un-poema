@@ -1480,7 +1480,7 @@ function buildMaskEditor() {
       <div class="sent-details">
         <p>Envíala a este correo (la <strong>portada</strong> y la <strong>contraportada</strong>):</p>
         <p class="share-email">${SHARE_EMAIL}</p>
-        <button class="primary-btn sent-save">Guardar otra vez</button>
+        <button class="primary-btn sent-save">Descargar otra vez</button>
         <button class="primary-btn sent-copy">Copiar correo</button>
         <p class="share-note"></p>
       </div>
@@ -2067,8 +2067,10 @@ function downloadPostcard() {
     return;
   }
   editorCardEl.classList.add("flipped");
-  // En el teléfono el menú para guardar solo se abre justo al tocar el botón
-  if (isMobile()) saveBothSides();
+  // Portada y contraportada se descargan justo al tocar el botón: si se
+  // espera al final de la animación, el navegador bloquea la segunda
+  // descarga (y en el teléfono el menú para guardar no se abre)
+  saveBothSides();
   setTimeout(playEnvelope, 300); // la postal entra a un sobre y se cierra
 }
 
@@ -2145,16 +2147,11 @@ function playEnvelope() {
   later(() => { card.style.opacity = "0"; },
     CARD_SHRINK_MS + ENVELOPE_RISE_MS + CARD_IN_MS + CARD_SINK_MS + 100 + FLAP_CLOSE_MS);
 
-  // 6) Se descargan las dos fotos y aparece el mensaje con el correo
-  // En el teléfono no se guardan solas: el menú para guardarlas en la
-  // galería necesita que la persona toque un botón ("Guardar en mis fotos")
+  // 6) Aparece el mensaje con el correo (las fotos ya se descargaron al
+  // tocar "Descargar postal"; "Descargar otra vez" por si alguna no quedó)
   later(() => {
-    const mobile = isMobile();
-    maskEditorEl.querySelector(".sent-save").style.display = mobile ? "" : "none";
-    maskEditorEl.querySelector(".share-note").textContent = mobile
-      ? "Si no quedaron guardadas, toca «Guardar otra vez»."
-      : "";
-    if (!mobile) saveBothSides();
+    maskEditorEl.querySelector(".share-note").textContent =
+      "Si no se descargaron las dos (portada y contraportada), toca «Descargar otra vez».";
     maskEditorEl.classList.add("sent");
   }, CARD_SHRINK_MS + ENVELOPE_RISE_MS + CARD_IN_MS + CARD_SINK_MS + 100 + FLAP_CLOSE_MS + 200);
 }
@@ -2188,15 +2185,17 @@ function canvasToFile(canvasEl, name, type) {
 }
 
 function downloadFiles(files) {
-  files.forEach((file, i) => {
-    setTimeout(() => {
-      const url = URL.createObjectURL(file);
-      const link = document.createElement("a");
-      link.download = file.name;
-      link.href = url;
-      link.click();
-      setTimeout(() => URL.revokeObjectURL(url), 2000);
-    }, i * 300); // una tras otra, para que el navegador no bloquee la segunda
+  // Todas de inmediato, mientras dura el clic de la persona: con esperas
+  // entre ellas, el navegador bloquea las que vienen después de la primera
+  files.forEach((file) => {
+    const url = URL.createObjectURL(file);
+    const link = document.createElement("a");
+    link.download = file.name;
+    link.href = url;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
   });
 }
 
