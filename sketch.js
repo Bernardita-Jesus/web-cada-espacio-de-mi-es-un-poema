@@ -21,6 +21,8 @@ const CONFIG = {
   lineSpacing: 24,             // separación entre líneas del poema (a tamaño de referencia)
   minSegmentWidth: 40,         // ancho mínimo de cuerpo para escribir ahí (a tamaño de referencia)
   maxRowGap: 16,               // huecos pequeños que se ignoran (a tamaño de referencia)
+  edgeMargin: 40,              // margen sin texto junto a los bordes de la foto, para que
+                                // ninguna palabra quede cortada (a tamaño de referencia)
   referenceSize: 900,          // tamaño de foto para el que estos valores están pensados;
                                 // con fotos más grandes o chicas, todo escala proporcionalmente
 
@@ -373,11 +375,10 @@ function openPostcard(el) {
   postcardBackEls.name.textContent = data.name;
   postcardBackEls.place.textContent = data.place;
   postcardBackEls.date.textContent = data.date;
-  postcardBackEls.stamp.textContent = "N.º " + data.number;
 
   postcardLargeEl.classList.remove("flipped");
-  sizeLargePostcard();
   postcardViewerEl.classList.add("open");
+  sizeLargePostcard(); // ya abierta, para poder medir si el poema cabe
   updateScrollLock();
 }
 
@@ -403,6 +404,21 @@ function sizeLargePostcard() {
   // Las letras del reverso escalan como en una postal 3:2 de este ancho,
   // para que no se agranden de más si la foto es más alta
   postcardLargeEl.style.setProperty("--h", backTextHeight(w, h) + "px");
+  fitPoemText(postcardBackEls.poem);
+}
+
+// Si el poema no cabe en el reverso (sobre "Poema por"), achica un poco
+// su letra hasta que quepa entero
+function fitPoemText(poemEl) {
+  if (!poemEl) return;
+  const box = poemEl.parentElement; // .pc-message: poema + "Poema por"
+  let em = 0.85;                    // tamaño normal (ver .pc-poem)
+  poemEl.style.fontSize = em + "em";
+  if (!box.clientHeight) return;    // todavía no se ve: se ajusta al abrir
+  while (box.scrollHeight > box.clientHeight + 1 && em > 0.35) {
+    em *= 0.95;
+    poemEl.style.fontSize = em + "em";
+  }
 }
 
 // Arma el reverso de la postal: a la izquierda el mensaje (poema), a la
@@ -781,20 +797,30 @@ function injectStyles() {
     .editor-card.flipped .postcard-inner { transform: rotateY(180deg); }
     #maskEditor.done .editor-card { cursor: pointer; } /* en la etapa 3 se puede dar vuelta */
     /* Etapa 3: guardar solo con los datos completos */
-    #maskEditor:not(.data-ok) .final-row { display: none !important; }
-    /* Arriba: la estampilla para enviar la postal (con los datos completos) */
-    /* Pregunta centrada como título; debajo, el subtítulo con la estampilla */
-    .stamp-offer {
-      display: none; flex-direction: column; align-items: center; gap: 8px;
-      color: #555555; max-width: min(640px, 92%); text-align: center;
+    #maskEditor:not(.data-ok) .final-download { opacity: 0.55; } /* se ve, pero falta rellenar */
+    /* Datos que faltan por rellenar: remarcados en terracota */
+    #maskEditor.step3 .pc-missing {
+      background: rgba(181, 84, 58, 0.09);
+      border-bottom: 1.5px solid #B5543A;
+      border-radius: 3px 3px 0 0;
+      padding-left: 0.35em; padding-right: 0.35em;
+      animation: pc-missing-glow 2.4s ease-in-out infinite;
     }
-    .stamp-offer-title {
-      font-size: 24px; font-weight: 600; line-height: 1.2; color: #B5543A; /* como el título de la página */
+    #maskEditor.step3 .pc-missing .pc-label { color: #B5543A; }
+    #maskEditor.step3 .pc-missing .pc-input::placeholder,
+    #maskEditor.step3 .pc-missing .pc-date-text.empty { color: #C98A78; }
+    #maskEditor.step3 .pc-author-row.pc-missing { padding-top: 0.3em; padding-bottom: 0.2em; }
+    @keyframes pc-missing-glow {
+      0%, 100% { background-color: rgba(181, 84, 58, 0.06); }
+      50% { background-color: rgba(181, 84, 58, 0.16); }
     }
-    .stamp-offer-row { display: flex; align-items: center; justify-content: center; gap: 12px; }
-    .stamp-offer-sub { font-size: 14px; color: #666666; }
-    #maskEditor.data-ok .stamp-offer { display: flex; }
-    #maskEditor.stamped .stamp-offer .stamp { visibility: hidden; } /* ya está pegada */
+    /* Tocaron "Descargar postal" sin rellenar todo: los que faltan tiemblan */
+    #maskEditor.nudge .pc-missing { animation: pc-missing-shake 0.45s ease-in-out, pc-missing-glow 2.4s ease-in-out infinite 0.45s; }
+    @keyframes pc-missing-shake {
+      0%, 100% { transform: translateX(0); }
+      25% { transform: translateX(-4px); }
+      75% { transform: translateX(4px); }
+    }
     .stamp {
       flex-shrink: 0; width: 66px; height: 82px; padding: 5px; /* mismo tamaño siempre */
       background: #FFFFFF;
@@ -845,10 +871,10 @@ function injectStyles() {
     .flap-front { visibility: hidden; }
     #maskEditor.env-closing .flap-back { visibility: hidden; }
     #maskEditor.env-closing .flap-front { visibility: visible; transform: rotateX(0deg); }
-    #maskEditor.env-closing .editor-card { opacity: 0; } /* ya tapada por la solapa */
+    /* Dentro del sobre, sin sombra: así nada asoma bajo su borde */
+    #maskEditor.env-up .editor-card .postcard-face { box-shadow: none; }
     /* Mientras se ensobra, desaparecen botones y textos */
     #maskEditor.sending .final-block,
-    #maskEditor.sending .stamp-offer,
     #maskEditor.sending .mask-editor-hint,
     #maskEditor.sending .mask-editor-tools { display: none !important; }
     /* Mensaje final, arriba del sobre */
@@ -860,7 +886,29 @@ function injectStyles() {
     .sent-message p { margin: 0 0 10px; }
     .sent-message .sent-copy, .sent-message .sent-save { width: auto; display: inline-block; padding: 9px 22px; margin: 0 4px 12px; }
     .sent-message .sent-save { background: #B5543A; } /* lo primero que hay que hacer */
-    .sent-title { font-size: 18px; font-weight: 600; color: #B5543A; }
+    /* Título del mensaje final, como el título de la página */
+    .sent-message .sent-details { margin-top: 96px; } /* más abajo, separado del título */
+    .sent-message .sent-question { margin: 0 0 14px; font-size: 40px; font-weight: 600; line-height: 1.15; color: #2FB5A8; } /* turquesa, como la estampilla del sobre */
+    /* "Postales descargadas": estampilla turquesa que se pega en el sobre
+       ya cerrado (mismo borde perforado que las otras) */
+    .sent-stamp {
+      position: absolute; left: 50%; top: 56%; z-index: 1; /* sobre la punta de la solapa */
+      max-width: 80%; padding: 6px;
+      background: #FFFFFF;
+      opacity: 0; transform: translate(-50%, -50%) scale(1.6) rotate(-14deg);
+      transition: opacity 0.25s ease-out, transform 0.45s cubic-bezier(.3,1.5,.5,1);
+      -webkit-mask: linear-gradient(#000 0 0) content-box,
+                    radial-gradient(circle 2.5px at 4px 4px, transparent 96%, #000) 0 0 / 8px 8px;
+              mask: linear-gradient(#000 0 0) content-box,
+                    radial-gradient(circle 2.5px at 4px 4px, transparent 96%, #000) 0 0 / 8px 8px;
+      filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.15));
+    }
+    .sent-stamp-inner {
+      background: #2FB5A8; color: #FFFFFF; /* turquesa, como la silueta */
+      padding: 10px 18px; font-size: 16px; font-weight: 600; letter-spacing: 0.02em;
+      text-align: center; line-height: 1.2;
+    }
+    #maskEditor.sent .sent-stamp { opacity: 1; transform: translate(-50%, -50%) scale(1) rotate(-4deg); }
     #maskEditor.sent .sent-message { display: block; animation: viewer-in 0.4s ease-out; }
     /* Reverso editable */
     .pc-top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: auto; gap: 0.6em; }
@@ -876,17 +924,11 @@ function injectStyles() {
     }
     /* Arriba, en la etapa 3 hasta completar los datos */
     .complete-prompt {
-      display: none; font-size: 14px; font-weight: 600; color: #B5543A;
+      display: none; font-size: 24px; font-weight: 600; line-height: 1.2; color: #B5543A; /* como el título de la página */
       text-align: center; max-width: min(560px, 90%);
     }
-    #maskEditor.step3:not(.data-ok):not(.sending) .complete-prompt { display: block; }
-    /* En el teléfono el aviso se divide: arriba "Completa tus datos…",
-       abajo de la postal "Guardar tus resultados" (hasta que aparece el botón) */
-    .save-prompt { display: none; font-size: 14px; font-weight: 600; color: #B5543A; text-align: center; }
-    .pc-stamp.drop-over { border-color: #B5543A; background: rgba(181, 84, 58, 0.08); }
+    #maskEditor.step3:not(.sending) .complete-prompt { display: block; }
     /* Pegada: la estampilla mantiene su tamaño, centrada en el recuadro */
-    .pc-stamp.stamped { border-color: transparent; font-size: inherit; }
-    .pc-stamp.stamped .stamp { cursor: default; }
     .pc-input {
       flex: 1; min-width: 0; border: none; background: transparent; outline: none;
       font: inherit; color: #444444; padding: 0;
@@ -905,7 +947,6 @@ function injectStyles() {
     .final-block.confirmed .color-row { display: none; } /* tras "Listo" se reemplaza por guardar/enviar */
     .final-row, .final-block:not(.confirmed) .final-row.ready { display: none; }
     .final-row .primary-btn { flex: 1; width: auto; }
-    .final-row .final-both { display: none; } /* solo en el teléfono */
     .final-row.ready { display: flex; }
     #maskEditor:not(.done) .final-block { display: none; }
     #maskEditor.done .mask-editor-tools { display: none; } /* en su lugar van guardar/enviar */
@@ -948,18 +989,22 @@ function injectStyles() {
       gap: calc(var(--h) * 0.06);
       font-size: calc(var(--h) * 0.045);
     }
-    .pc-message { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+    .pc-message { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
     .pc-poem { font-size: 0.85em; line-height: 1.3; white-space: pre-line; } /* respeta los saltos de línea */
     .pc-author { margin-top: auto; padding-top: 1em; font-size: 0.7em; color: #888888; } /* siempre al fondo */
     .pc-divider { width: 1px; background: #CCCCCC; }
     .pc-address { flex: 1; min-width: 0; display: flex; flex-direction: column; font-size: 0.7em; } /* datos más pequeños que el poema */
+    /* Sello (matasellos) arriba a la derecha: por ahora vacío, dos anillos */
     .pc-stamp {
-      align-self: flex-end;
-      width: calc(var(--h) * 0.22); height: calc(var(--h) * 0.26);
-      border: 2px dashed #AAAAAA; border-radius: 3px;
-      display: flex; align-items: center; justify-content: center;
-      font-size: 0.8em; color: #888888;
+      align-self: flex-end; position: relative; flex-shrink: 0;
+      width: calc(var(--h) * 0.24); height: calc(var(--h) * 0.24);
+      border: 1.5px solid #AAAAAA; border-radius: 50%;
+      transform: rotate(-8deg);
       margin-bottom: auto;
+    }
+    .pc-stamp::after {
+      content: ""; position: absolute; inset: 9%;
+      border: 1px solid #AAAAAA; border-radius: 50%;
     }
     .pc-line {
       border-bottom: 1px solid #CCCCCC;
@@ -1073,17 +1118,9 @@ function injectStyles() {
       .primary-btn, .toggle-btn { min-height: 42px; font-size: 13px; }
       .mask-editor-hint, #postcardHint { padding: 0 16px; text-align: center; }
 
-      /* Terminada la postal, un solo botón que guarda las dos fotos */
-      .final-row .final-save, .final-row .final-back { display: none; }
-      .final-row .final-both { display: block; }
-      /* Sin estampilla ni sobre en el teléfono: la postal solo se guarda */
-      #maskEditor.data-ok .stamp-offer { display: none; }
-      .complete-prompt { padding: 0 16px; max-width: 100%; }
-      .complete-prompt .cp-rest { display: none; }
-      #maskEditor.step3:not(.data-ok):not(.sending) .save-prompt { display: block; }
-      .stamp-offer-title { font-size: 19px; }
-      .stamp-offer-row { gap: 10px; }
+      .complete-prompt { padding: 0 16px; max-width: 100%; font-size: 19px; }
       .sent-message { width: calc(100% - 32px); top: 6%; }
+      .sent-message .sent-question { font-size: 28px; }
       #resultViewer img { max-width: 92%; max-height: 70%; }
     }
   `;
@@ -1102,7 +1139,7 @@ function buildInterface() {
   createElement("h1", "Ahora cada espacio<br>de mí es un poema")
     .id("title")
     .parent(colTitle);
-  createP("Una web para representarte y cubrirte de un poema. Subes tu foto, escribes, y tus palabras se acomodan dentro de tu silueta.")
+  createP("Una experiencia web interactiva para cubrirte y plasmarte en un poema. Subes tu autorretrato, escribes tus palabras y estas se distribuyen dentro de tu silueta.")
     .id("subtitle")
     .parent(colTitle);
 
@@ -1385,21 +1422,13 @@ function buildMaskEditor() {
   maskEditorEl.id = "maskEditor";
   // La foto es el frente de una postal; en la etapa 3 gira y muestra el reverso
   maskEditorEl.innerHTML = `
-    <div class="complete-prompt">Completa tus datos para terminar tu postal<span class="cp-rest"> y guardar tus resultados</span></div>
-    <div class="stamp-offer">
-      <div class="stamp-offer-title">¿Quieres que tu postal sea parte de esta web?</div>
-      <div class="stamp-offer-row">
-        <div class="stamp-offer-sub">Arrastra esta estampilla a la postal</div>
-        <div class="stamp" id="dragStamp" title="Arrástrala al recuadro de la estampilla">${STAMP_HTML}</div>
-      </div>
-    </div>
+    <div class="complete-prompt">Rellena tus datos</div>
     <div class="postcard-large editor-card">
       <div class="postcard-inner">
         <div class="editor-front"><canvas id="maskEditorCanvas"></canvas></div>
         <div class="postcard-face postcard-back" id="editorBack"></div>
       </div>
     </div>
-    <div class="save-prompt">Guardar tus resultados</div>
     <div class="btn-row mask-editor-tools">
       <button class="toggle-btn" id="maskChange">Cambiar autorretrato</button>
       <button class="toggle-btn" id="maskPaint">Pintar</button>
@@ -1414,14 +1443,17 @@ function buildMaskEditor() {
     <div class="envelope env-layer-front" aria-hidden="true">
       <div class="env-front"></div>
       <div class="env-flap flap-front"></div>
+      <div class="sent-stamp"><div class="sent-stamp-inner">Postales<br>descargadas</div></div>
     </div>
     <div class="sent-message">
-      <p class="sent-title">Tu postal está en el sobre</p>
-      <p>Tienes que enviar ambas fotos, la <strong>portada</strong> y la <strong>contraportada</strong>, a este correo:</p>
-      <p class="share-email">${SHARE_EMAIL}</p>
-      <button class="primary-btn sent-save">Guardar en mis fotos</button>
-      <button class="primary-btn sent-copy">Copiar correo</button>
-      <p class="share-note"></p>
+      <p class="sent-question">¿Quieres que tu postal forme parte de esta web?</p>
+      <div class="sent-details">
+        <p>Envíala a este correo (la <strong>portada</strong> y la <strong>contraportada</strong>):</p>
+        <p class="share-email">${SHARE_EMAIL}</p>
+        <button class="primary-btn sent-save">Guardar otra vez</button>
+        <button class="primary-btn sent-copy">Copiar correo</button>
+        <p class="share-note"></p>
+      </div>
     </div>`;
   placeMaskEditor();
 
@@ -1437,7 +1469,6 @@ function buildMaskEditor() {
     catch (err) { sentCopy.textContent = "No se pudo copiar"; }
     setTimeout(() => { sentCopy.textContent = "Copiar correo"; }, 2000);
   });
-  setupStampDrag(maskEditorEl.querySelector("#dragStamp"));
   maskEditorPaintBtn = maskEditorEl.querySelector("#maskPaint");
   maskEditorEraseBtn = maskEditorEl.querySelector("#maskErase");
   maskEditorEl.querySelector("#maskChange").addEventListener("click", () => pickPhoto());
@@ -1460,13 +1491,11 @@ function buildMaskEditor() {
   maskEditorEl.addEventListener("click", (e) => {
     if (e.target.closest("button")) return; // los botones no cierran
     if (e.target.closest("#poemBox")) return; // escribir el poema (en el teléfono, sobre la foto) tampoco
-    if (stampJustDragged) { stampJustDragged = false; return; } // soltar la estampilla no cierra
     if (maskEditorEl.classList.contains("sending")) {
       // mientras se ensobra no se cierra; ya enviada, solo tocar fuera del mensaje cierra
       if (maskEditorEl.classList.contains("sent") && !e.target.closest(".sent-message")) closeMaskEditor();
       return;
     }
-    if (e.target.closest(".stamp-offer")) return;
     // En la etapa 3, tocar la postal la da vuelta (tocar fuera la cierra);
     // escribir en los datos no la da vuelta
     if (isEditorStep3() && e.target.closest(".editor-card")) {
@@ -1566,6 +1595,7 @@ function sizeMaskEditor() {
   maskEditorCanvasEl.style.height = h + "px";
   // Las letras del reverso escalan como en una postal 3:2 de este ancho
   editorCardEl.style.setProperty("--h", backTextHeight(w, h) + "px");
+  if (editorBackEls) fitPoemText(editorBackEls.poem);
   if (editorPhase === "edit") {
     maskEditorFit = drawPhotoWithMask(maskEditorCanvasEl);
   } else {
@@ -1581,12 +1611,10 @@ function computeGridSegments() {
   const w = maskImg.width;
   const h = maskImg.height;
   const scale = Math.max(w, h) / CONFIG.referenceSize;
-  const lineSpacing = CONFIG.lineSpacing * scale;
   const out = [];
-  for (let y = lineSpacing; y < h; y += lineSpacing) {
-    const yy = Math.floor(y);
+  for (const yy of poemRows(h, scale)) {
     const segs = scanRowSegments(maskImg, yy, CONFIG.cellCoverageThreshold,
-      CONFIG.minSegmentWidth * scale, CONFIG.maxRowGap * scale);
+      CONFIG.minSegmentWidth * scale, CONFIG.maxRowGap * scale, CONFIG.edgeMargin * scale);
     for (const [x0, x1] of segs) out.push({ y: yy, x0, x1 });
   }
   return out;
@@ -1742,9 +1770,7 @@ function makeFinalRow(parent, onConfirm) {
       <button class="primary-btn final-confirm">Listo</button>
     </div>
     <div class="btn-row final-row">
-      <button class="primary-btn final-save">Guardar portada</button>
-      <button class="primary-btn final-back">Guardar contraportada</button>
-      <button class="primary-btn final-both">Guardar las fotos</button>
+      <button class="primary-btn final-download">Descargar postal</button>
     </div>`;
   const white = block.querySelector(".final-white");
   const black = block.querySelector(".final-black");
@@ -1756,9 +1782,7 @@ function makeFinalRow(parent, onConfirm) {
     block.classList.add("confirmed");
     if (onConfirm) onConfirm();
   });
-  block.querySelector(".final-save").addEventListener("click", savePortada);
-  block.querySelector(".final-back").addEventListener("click", saveContraportada);
-  block.querySelector(".final-both").addEventListener("click", saveBothSides); // en el teléfono, un solo botón
+  block.querySelector(".final-download").addEventListener("click", downloadPostcard);
   parent.appendChild(block);
   const row = block.querySelector(".final-row");
   finalRows.push(row);
@@ -1785,7 +1809,6 @@ function editorHint() {
 
 // ---- Etapa 3: la postal se da vuelta y se escriben los datos ----
 let editorCardEl, editorBackEls;
-let stampJustDragged = false;
 
 function isEditorStep3() {
   return maskEditorOpen && editorPhase === "done" &&
@@ -1831,7 +1854,7 @@ function buildEditorBack(backEl) {
     <div class="pc-divider"></div>
     <div class="pc-address">
       <div class="pc-top">
-        <div class="pc-stamp" id="editorStampBox">Estampilla</div>
+        <div class="pc-stamp" id="editorStampBox"></div>
       </div>
       <label class="pc-line"><span class="pc-label">De</span>
         <input class="pc-input" id="backName" maxlength="60" placeholder="tu nombre"></label>
@@ -1886,6 +1909,9 @@ function updateEditorDataUI() {
   const dateText = formatPostcardDate(editorBackEls.date.value);
   editorBackEls.dateText.textContent = dateText || "elige la fecha";
   editorBackEls.dateText.classList.toggle("empty", !dateText);
+  // Remarca los datos que faltan por rellenar
+  const fields = [editorBackEls.author, editorBackEls.name, editorBackEls.place, editorBackEls.date];
+  for (const input of fields) input.closest("label").classList.toggle("pc-missing", !input.value.trim());
   maskEditorEl.classList.toggle("step3", isEditorStep3());
   maskEditorEl.classList.toggle("data-ok", isEditorStep3() && editorDataComplete());
   if (isEditorStep3()) maskEditorHintEl.textContent = editorHint();
@@ -1895,59 +1921,35 @@ function updateEditorDataUI() {
 function fillEditorBack() {
   if (!editorBackEls) return;
   editorBackEls.poem.textContent = poemTextarea.value().trim();
+  fitPoemText(editorBackEls.poem);
 }
 
-// ---- Arrastrar la estampilla al recuadro de la postal ----
-function setupStampDrag(stampEl) {
-  let ghost = null;
-  const move = (e) => {
-    ghost.style.left = e.clientX + "px";
-    ghost.style.top = e.clientY + "px";
-    const r = editorBackEls.stampBox.getBoundingClientRect();
-    const over = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
-    editorBackEls.stampBox.classList.toggle("drop-over", over);
-  };
-  stampEl.addEventListener("pointerdown", (e) => {
-    if (!maskEditorEl.classList.contains("data-ok")) return;
-    e.preventDefault();
-    editorCardEl.classList.add("flipped"); // el recuadro está en el reverso
-    try { stampEl.setPointerCapture(e.pointerId); } catch (err) { /* sin captura igual funciona */ }
-    ghost = stampEl.cloneNode(true);
-    ghost.removeAttribute("id");
-    ghost.classList.add("stamp-ghost");
-    document.body.appendChild(ghost);
-    stampEl.classList.add("dragging");
-    move(e);
-  });
-  stampEl.addEventListener("pointermove", (e) => { if (ghost) move(e); });
-  const end = (e) => {
-    if (!ghost) return;
-    const box = editorBackEls.stampBox;
-    const dropped = box.classList.contains("drop-over");
-    box.classList.remove("drop-over");
-    ghost.remove();
-    ghost = null;
-    stampEl.classList.remove("dragging");
-    stampJustDragged = true;
-    setTimeout(() => { stampJustDragged = false; }, 0);
-    if (dropped) {
-      box.innerHTML = '<div class="stamp">' + STAMP_HTML + "</div>";
-      box.classList.add("stamped");
-      maskEditorEl.classList.add("stamped");
-      setTimeout(playEnvelope, 500); // la postal entra a un sobre y se cierra
-    }
-  };
-  stampEl.addEventListener("pointerup", end);
-  stampEl.addEventListener("pointercancel", end);
+// ---- "Descargar postal": se pega la estampilla, la postal entra al
+// sobre y se descarga ----
+function downloadPostcard() {
+  if (!isEditorStep3() || maskEditorEl.classList.contains("sending")) return;
+  if (!editorDataComplete()) {
+    // Faltan datos: se muestra el reverso y parpadean los que faltan
+    editorCardEl.classList.add("flipped");
+    maskEditorEl.classList.remove("nudge");
+    void maskEditorEl.offsetWidth; // reinicia la animación
+    maskEditorEl.classList.add("nudge");
+    const first = editorBackEls.stampBox.closest(".postcard-back").querySelector(".pc-missing input:not([type=date])");
+    if (first) first.focus();
+    return;
+  }
+  editorCardEl.classList.add("flipped");
+  // En el teléfono el menú para guardar solo se abre justo al tocar el botón
+  if (isMobile()) saveBothSides();
+  setTimeout(playEnvelope, 300); // la postal entra a un sobre y se cierra
 }
 
-// ---- El sobre: la postal se achica, sube el sobre, la postal entra,
-// se hunde hasta quedar tapada por el bolsillo, se cierra la solapa y
-// aparece el correo ----
+// ---- El sobre: la postal se achica, sube el sobre, la postal entra
+// (sin salirse por abajo), se cierra la solapa y aparece el correo ----
 const CARD_SHRINK_MS = 700;      // primero la postal se achica en su lugar
 const ENVELOPE_RISE_MS = 800;    // luego sube el sobre desde abajo
 const CARD_IN_MS = 900;          // la postal baja y entra al sobre
-const CARD_SINK_MS = 700;        // se hunde en el bolsillo hasta quedar tapada
+const CARD_SINK_MS = 250;        // pausa con la postal ya dentro del sobre
 const FLAP_CLOSE_MS = 700;       // recién entonces se cierra la solapa
 let envelopeTimers = [];
 
@@ -1987,15 +1989,6 @@ function playEnvelope() {
   const ease = "cubic-bezier(.45,.05,.35,1)";
   const smallH = cardRect.height * scale; // alto de la postal ya achicada
 
-  // Lo que asoma bajo el borde de abajo del sobre se recorta, así parece
-  // que la postal está dentro del bolsillo (clip-path va en px de la postal
-  // sin achicar, por eso se divide por scale)
-  const clipBelow = (cardTop, envRect) => {
-    const pocketBottom = envRect.top + envRect.height * 0.97;
-    const sticksOut = Math.max(0, cardTop + smallH - pocketBottom);
-    return "inset(0 0 " + (sticksOut / scale) + "px 0)";
-  };
-
   // 1) La postal se achica en su lugar, al tamaño que cabe en el sobre
   requestAnimationFrame(() => {
     card.style.transition = "transform " + CARD_SHRINK_MS + "ms " + ease;
@@ -2005,35 +1998,24 @@ function playEnvelope() {
   // 2) Sube el sobre abierto
   later(() => maskEditorEl.classList.add("env-up"), CARD_SHRINK_MS);
 
-  // 3) La postal (ya chica) baja y entra al sobre, detrás del bolsillo
-  let dx = 0, dy = 0;
+  // 3) La postal (ya chica) baja y entra al sobre, detrás del bolsillo.
+  //    Queda entera dentro del sobre (nunca pasa su borde de abajo): el
+  //    bolsillo tapa la parte de abajo y la solapa, al cerrarse, la de arriba
   later(() => {
     const envRect = pageRect(env);
-    dx = (envRect.left + envRect.width / 2) - (cardRect.left + cardRect.width / 2);
-    dy = (envRect.top + envRect.height * 0.55) - (cardRect.top + cardRect.height / 2);
-    const top = cardRect.top + cardRect.height / 2 + dy - smallH / 2;
-    card.style.transition = "transform " + CARD_IN_MS + "ms " + ease + ", clip-path " + CARD_IN_MS + "ms " + ease;
-    card.style.clipPath = clipBelow(top, envRect);
+    const dx = (envRect.left + envRect.width / 2) - (cardRect.left + cardRect.width / 2);
+    const dy = (envRect.top + envRect.height * 0.5) - (cardRect.top + cardRect.height / 2);
+    card.style.transition = "transform " + CARD_IN_MS + "ms " + ease;
     card.style.transform = "translate(" + dx + "px, " + dy + "px) scale(" + scale + ")";
   }, CARD_SHRINK_MS + ENVELOPE_RISE_MS);
 
-  // 4) Se hunde hasta que su borde de arriba pasa bajo la "V" del bolsillo:
-  //    queda tapada entera
-  later(() => {
-    const envRect = pageRect(env);
-    const top = cardRect.top + cardRect.height / 2 + dy - smallH / 2;
-    const vBottom = envRect.top + envRect.height * 0.6; // punta de la "V" (56%) + un poco
-    const sink = Math.max(0, vBottom - top);
-    card.style.transition = "transform " + CARD_SINK_MS + "ms ease-in, clip-path " + CARD_SINK_MS + "ms ease-in";
-    card.style.clipPath = clipBelow(top + sink, envRect);
-    card.style.transform = "translate(" + dx + "px, " + (dy + sink) + "px) scale(" + scale + ")";
-  }, CARD_SHRINK_MS + ENVELOPE_RISE_MS + CARD_IN_MS);
+  // 4) Una pausa breve y se cierra la solapa encima
+  later(() => maskEditorEl.classList.add("env-closing"),
+    CARD_SHRINK_MS + ENVELOPE_RISE_MS + CARD_IN_MS + CARD_SINK_MS + 100);
 
-  // 5) Ya tapada, se cierra la solapa
-  later(() => {
-    card.style.opacity = "0"; // ya no se ve; así no se asoma por ningún lado
-    maskEditorEl.classList.add("env-closing");
-  }, CARD_SHRINK_MS + ENVELOPE_RISE_MS + CARD_IN_MS + CARD_SINK_MS + 100);
+  // 5) Con la solapa ya cerrada, la postal (tapada) deja de existir
+  later(() => { card.style.opacity = "0"; },
+    CARD_SHRINK_MS + ENVELOPE_RISE_MS + CARD_IN_MS + CARD_SINK_MS + 100 + FLAP_CLOSE_MS);
 
   // 6) Se descargan las dos fotos y aparece el mensaje con el correo
   // En el teléfono no se guardan solas: el menú para guardarlas en la
@@ -2042,8 +2024,8 @@ function playEnvelope() {
     const mobile = isMobile();
     maskEditorEl.querySelector(".sent-save").style.display = mobile ? "" : "none";
     maskEditorEl.querySelector(".share-note").textContent = mobile
-      ? "Guarda las dos fotos en tu galería y envíalas a ese correo. Esta postal podrá ser utilizada para la construcción de este sitio web."
-      : "Ya se descargaron en tu dispositivo. Esta postal podrá ser utilizada para la construcción de este sitio web.";
+      ? "Si no quedaron guardadas, toca «Guardar otra vez»."
+      : "";
     if (!mobile) saveBothSides();
     maskEditorEl.classList.add("sent");
   }, CARD_SHRINK_MS + ENVELOPE_RISE_MS + CARD_IN_MS + CARD_SINK_MS + 100 + FLAP_CLOSE_MS + 200);
@@ -2052,15 +2034,11 @@ function playEnvelope() {
 function resetEnvelope() {
   envelopeTimers.forEach(clearTimeout);
   envelopeTimers = [];
-  maskEditorEl.classList.remove("sending", "env-up", "env-closing", "sent", "stamped");
+  maskEditorEl.classList.remove("sending", "env-up", "env-closing", "sent", "stamped", "nudge");
   editorCardEl.style.transition = "";
   editorCardEl.style.transform = "";
   editorCardEl.style.clipPath = "";
   editorCardEl.style.opacity = "";
-  if (editorBackEls) {
-    editorBackEls.stampBox.classList.remove("stamped");
-    editorBackEls.stampBox.textContent = "Estampilla";
-  }
 }
 
 // ---- Guardar portada (foto + poema) y contraportada (reverso) ----
@@ -2177,21 +2155,38 @@ function drawBackCanvas() {
 
   const colW = (W - 2 * pad - 2 * gap) / 2;
   // Poema (respeta los saltos de línea y parte las líneas largas)
+  // Arma los renglones con un tamaño de letra dado ("" = renglón vacío)
+  const poemLines = (size) => {
+    ctx.font = font(size);
+    const lines = [];
+    for (const para of d.poem.split("\n")) {
+      if (!para.trim()) { lines.push(""); continue; }
+      let line = "";
+      for (const w of para.split(" ")) {
+        const test = line ? line + " " + w : w;
+        if (ctx.measureText(test).width > colW && line) { lines.push(line); line = w; }
+        else line = test;
+      }
+      if (line) lines.push(line);
+    }
+    return lines;
+  };
+  // Si no cabe entero sobre "Poema por", la letra se achica de a poco
+  const poemMaxH = H - 2 * pad - base * 0.7 * 2; // deja lugar para "Poema por" y un espacio
+  let poemSize = base * 0.85;
+  let lines = poemLines(poemSize);
+  while (lines.length * poemSize * 1.3 > poemMaxH && poemSize > base * 0.3) {
+    poemSize *= 0.95;
+    lines = poemLines(poemSize);
+  }
+  const lh = poemSize * 1.3;
   ctx.fillStyle = "#444444";
   ctx.textBaseline = "top";
-  const poemSize = base * 0.85, lh = poemSize * 1.3;
   ctx.font = font(poemSize);
   let y = pad;
-  for (const para of d.poem.split("\n")) {
-    const words = para.split(" ");
-    let line = "";
-    if (!para.trim()) { y += lh; continue; }
-    for (const w of words) {
-      const test = line ? line + " " + w : w;
-      if (ctx.measureText(test).width > colW && line) { ctx.fillText(line, pad, y); y += lh; line = w; }
-      else line = test;
-    }
-    if (line) { ctx.fillText(line, pad, y); y += lh; }
+  for (const line of lines) {
+    if (line) ctx.fillText(line, pad, y);
+    y += lh;
   }
   // Poema por
   ctx.fillStyle = "#888888";
@@ -2204,32 +2199,15 @@ function drawBackCanvas() {
   ctx.fillStyle = "#CCCCCC";
   ctx.fillRect(divX, pad, Math.max(1, hRef * 0.002), H - 2 * pad);
 
-  // Estampilla (arriba a la derecha)
+  // Sello (arriba a la derecha): por ahora vacío, dos anillos como en pantalla
   const x1 = divX + gap, right = W - pad;
-  const sw = hRef * 0.22, sh = hRef * 0.26, sx = right - sw, sy = pad;
-  if (editorBackEls && editorBackEls.stampBox.classList.contains("stamped")) {
-    // Misma proporción estampilla/recuadro que en pantalla
-    const boxPx = editorBackEls.stampBox.getBoundingClientRect().width || 1;
-    const k = sw / boxPx;
-    const tw = 66 * k, th = 82 * k;
-    const tx = sx + (sw - tw) / 2, ty = sy + (sh - th) / 2;
-    ctx.fillStyle = "#FFFFFF"; ctx.fillRect(tx, ty, tw, th);
-    const m = 5 * k;
-    ctx.fillStyle = "#B5543A"; ctx.fillRect(tx + m, ty + m, tw - 2 * m, th - 2 * m);
-    ctx.strokeStyle = "#F3EDDC"; ctx.lineWidth = 2 * k; ctx.lineCap = "round";
-    const cx = tx + tw / 2, cy = ty + th * 0.3, r = tw * 0.09;
-    ctx.beginPath(); ctx.arc(cx, cy - r * 0.6, r, 0, Math.PI * 2); ctx.stroke();
-    ctx.beginPath(); ctx.arc(cx, cy + r * 2.4, r * 2, Math.PI, 0); ctx.stroke();
-    ctx.fillStyle = "#F3EDDC"; ctx.font = font(7 * k, "600");
-    ctx.textAlign = "center"; ctx.textBaseline = "alphabetic";
-    ["cada espacio", "de mí es", "un poema"].forEach((t, i) => ctx.fillText(t, cx, ty + th * 0.66 + i * 8 * k));
-    ctx.textAlign = "left";
-  } else {
-    ctx.strokeStyle = "#AAAAAA"; ctx.lineWidth = Math.max(1, hRef * 0.003);
-    ctx.setLineDash([hRef * 0.012, hRef * 0.008]);
-    ctx.strokeRect(sx, sy, sw, sh);
-    ctx.setLineDash([]);
-  }
+  const sealR = hRef * 0.12;
+  const sealX = right - sealR, sealY = pad + sealR;
+  ctx.strokeStyle = "#AAAAAA";
+  ctx.lineWidth = Math.max(1, hRef * 0.003);
+  ctx.beginPath(); ctx.arc(sealX, sealY, sealR, 0, Math.PI * 2); ctx.stroke();
+  ctx.lineWidth = Math.max(1, hRef * 0.002);
+  ctx.beginPath(); ctx.arc(sealX, sealY, sealR * 0.82, 0, Math.PI * 2); ctx.stroke();
 
   // De / Desde / Fecha (abajo, con su línea)
   const aSize = base * 0.7, labelSize = aSize * 0.7;
@@ -2628,7 +2606,7 @@ function buildShareDialog() {
       <p class="share-email">${SHARE_EMAIL}</p>
       <p>Adjunta las dos imágenes de tu postal: la <strong>portada</strong> y la <strong>contraportada</strong>.
         Tus datos ya van escritos en la contraportada.</p>
-      <p class="share-note">Esta postal podrá ser utilizada para la construcción de este sitio web.</p>
+      <p class="share-note"></p>
       <div class="btn-row">
         <button class="toggle-btn" id="shareCopy">Copiar correo</button>
         <button class="toggle-btn" id="shareDownload">Descargar portada y contraportada</button>
@@ -2802,8 +2780,9 @@ function poemToWords(poemText) {
 
 // En una fila de la imagen, encuentra los tramos que son parte del
 // cuerpo (puede haber más de uno). Ignora huequitos chicos.
-function scanRowSegments(mask, y, threshold, minWidth, maxGap) {
+function scanRowSegments(mask, y, threshold, minWidth, maxGap, margin) {
   const w = mask.width;
+  margin = margin || 0;
   const rowOffset = y * w;
 
   const segments = [];
@@ -2828,7 +2807,21 @@ function scanRowSegments(mask, y, threshold, minWidth, maxGap) {
   }
   if (inSegment) segments.push([segStart, lastAboveX]);
 
-  return segments.filter(([a, b]) => (b - a) >= minWidth);
+  // Nada pegado a los bordes: los tramos se recortan al margen
+  return segments
+    .map(([a, b]) => [Math.max(a, margin), Math.min(b, w - 1 - margin)])
+    .filter(([a, b]) => (b - a) >= minWidth);
+}
+
+// Filas donde puede ir texto: cada lineSpacing, sin acercarse a los bordes
+// de arriba y abajo más que el margen (más media letra, porque el texto
+// va centrado en su fila)
+function poemRows(h, scale) {
+  const lineSpacing = CONFIG.lineSpacing * scale;
+  const edge = CONFIG.edgeMargin * scale + (CONFIG.fontSize * scale) / 2;
+  const rows = [];
+  for (let y = Math.max(lineSpacing, edge); y <= h - edge; y += lineSpacing) rows.push(Math.floor(y));
+  return rows;
 }
 
 // Recorre el cuerpo fila por fila y va llenando cada tramo con
@@ -2918,15 +2911,13 @@ function buildPoemLines(poemText, isStale, onComplete) {
     lines.push({ y, x0: xStart, x1: xEnd, cx, text: line }); // para la animación del editor
   }
 
-  const rows = [];
-  for (let y = lineSpacing; y < h; y += lineSpacing) {
-    rows.push(Math.floor(y));
-  }
+  const rows = poemRows(h, scale);
+  const margin = CONFIG.edgeMargin * scale;
 
   runChunked(rows.length, 30, (i) => {
     if (isStale()) return; // no sigue trabajando en un dibujo descartado
     const y = rows[i];
-    const segments = scanRowSegments(maskImg, y, threshold, minSegmentWidth, maxRowGap);
+    const segments = scanRowSegments(maskImg, y, threshold, minSegmentWidth, maxRowGap, margin);
     for (const [xStart, xEnd] of segments) {
       fillSegment(xStart, xEnd, y);
     }
