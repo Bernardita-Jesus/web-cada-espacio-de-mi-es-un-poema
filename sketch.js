@@ -173,8 +173,16 @@ function backTextHeight(w, h) {
 
 // Con una vista en grande abierta, la página de atrás no hace scroll
 function updateScrollLock() {
-  // (en el teléfono el editor va dentro de la página, así que ahí sí se puede hacer scroll)
-  const open = (maskEditorOpen && !isMobile()) || resultViewerOpen || postcardViewerOpen;
+  // En el teléfono el editor va dentro de la página: queda fija mientras
+  // está abierto (así no se mueve al pintar), salvo que la pantalla sea tan
+  // baja que no quepa todo; en ese caso se deja hacer scroll para llegar a
+  // los botones
+  let mobileEditorLock = false;
+  if (maskEditorOpen && isMobile()) {
+    const fits = document.documentElement.scrollHeight <= window.innerHeight + 4;
+    mobileEditorLock = fits;
+  }
+  const open = (maskEditorOpen && !isMobile()) || mobileEditorLock || resultViewerOpen || postcardViewerOpen;
   document.body.classList.toggle("viewer-open", open);
 }
 
@@ -818,6 +826,8 @@ function injectStyles() {
     #previewBox.has-photo, #canvasFrame { cursor: zoom-in; }
     #maskEditorCanvas {
       display: block; touch-action: none; /* sin scroll al pintar con el dedo */
+      -webkit-user-select: none; user-select: none;
+      -webkit-touch-callout: none; /* sin menú ni lupa al mantener el dedo en el iPhone */
       border-radius: 4px; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15);
     }
     #maskEditorCanvas.can-paint { cursor: crosshair; }
@@ -1126,6 +1136,8 @@ function injectStyles() {
     @media (max-width: 700px), (max-height: 500px) and (orientation: landscape) {
       html, body { height: auto; overflow-x: hidden; overflow-y: auto; }
       body.viewer-open { overflow: hidden; } /* con algo abierto, no se mueve lo de atrás */
+      html, body { overscroll-behavior: none; } /* sin el "rebote" de la página al arrastrar */
+      html:has(body.viewer-open) { overflow: hidden; } /* en el iPhone el candado va también en <html> */
       /* Arriba una fila de postales chicas; abajo el panel, que llena el resto */
       #app { flex-direction: column; width: 100%; height: auto; min-height: 100vh; min-height: 100svh; }
       #below {
@@ -1747,6 +1759,11 @@ function sizeMaskEditor() {
   // Las letras del reverso escalan como en una postal 3:2 de este ancho
   editorCardEl.style.setProperty("--h", backTextHeight(w, h) + "px");
   if (editorBackEls) fitPoemText(editorBackEls.poem);
+  if (isMobile()) {
+    document.body.classList.remove("viewer-open"); // se mide sin el candado
+    window.scrollTo(0, 0);                         // todo el editor a la vista
+    updateScrollLock();
+  }
   if (editorPhase === "edit") {
     maskEditorFit = drawPhotoWithMask(maskEditorCanvasEl);
   } else {
@@ -2651,8 +2668,17 @@ function setupMaskBrush() {
     requestAnimationFrame(() => { frameQueued = false; maskEditorFit = drawPhotoWithMask(canvasEl); });
   };
 
+  // En el iPhone, "touch-action: none" no siempre basta: además se cancela
+  // el gesto de la página (scroll y rebote) mientras se pinta sobre la foto.
+  // Solo al pintar: en las otras etapas, tocar la foto sigue sirviendo para
+  // darla vuelta o cerrar.
+  const painting = () => maskEditorOpen && editorPhase === "edit" && maskReady;
+  const stopPageGesture = (e) => { if (painting() && e.cancelable) e.preventDefault(); };
+  canvasEl.addEventListener("touchstart", stopPageGesture, { passive: false });
+  canvasEl.addEventListener("touchmove", stopPageGesture, { passive: false });
+
   canvasEl.addEventListener("pointerdown", (e) => {
-    if (!maskEditorOpen || editorPhase !== "edit" || !maskReady) return;
+    if (!painting()) return;
     e.preventDefault();
     canvasEl.setPointerCapture(e.pointerId);
     last = pointAt(e);
