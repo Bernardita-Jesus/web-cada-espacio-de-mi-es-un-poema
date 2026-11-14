@@ -1129,7 +1129,7 @@ function injectStyles() {
       /* Arriba una fila de postales chicas; abajo el panel, que llena el resto */
       #app { flex-direction: column; width: 100%; height: auto; min-height: 100vh; min-height: 100svh; }
       #below {
-        order: -1; flex: none; height: 140px;
+        order: -1; flex: none; height: 92px; /* postales chicas: deja lugar para editar sin scroll */
         background: #F3EDDC; /* hueso */
         border-bottom: 1px solid #E8D2CE;
       }
@@ -1137,16 +1137,18 @@ function injectStyles() {
       .postcard { font-size: 22px; } /* número de prueba, a la medida de la postal chica */
       #panel {
         flex: 1; width: 100%; min-width: 0; overflow: visible;
-        border-right: none; padding-top: 8px;
+        border-right: none; padding-top: 4px; padding-bottom: 0;
       }
       #colTitle {
         order: -2; /* arriba de todo, antes de las postales */
-        background: #F7E6E3; padding: 32px 20px 16px; /* aire arriba: baja el título y todo lo demás */
+        background: #F7E6E3; padding: 16px 20px 10px; gap: 4px; /* compacto: todo cabe sin scroll */
         border-bottom: 1px solid #E8D2CE;
       }
-      #stepNav { border-top: none; }
-      #title { font-size: 22px; }
-      #subtitle { font-size: 12.5px; }
+      #stepNav { border-top: none; padding-top: 6px; padding-bottom: 6px; }
+      .step-tab { min-height: 34px; padding: 4px; }
+      #title { font-size: 18px; }
+      #title br { display: none; } /* el título en una sola línea */
+      #subtitle { font-size: 11.5px; line-height: 1.35; }
       #poemInput { font-size: 16px; height: 72px; } /* 16px: con menos el iPhone hace zoom al escribir. 3 renglones de 24px; si hay más, scroll */
 
       /* Una etapa a la vez: la barra de pasos elige cuál se ve */
@@ -1170,20 +1172,21 @@ function injectStyles() {
       /* El editor va dentro del panel, bajo la barra de pasos (ver placeMaskEditor) */
       #maskEditor {
         position: relative; inset: auto; z-index: auto;
-        background: transparent; gap: 12px;
-        margin: 0 -20px; padding: 18px 0 28px;
+        background: transparent; gap: 8px;
+        margin: 0 -20px; padding: 8px 0 10px;
       }
-      #maskEditor #poemBox { width: calc(100% - 50px) !important; margin: 10px auto 4px; } /* renglones bajo la foto */
+      #maskEditor #poemBox { width: calc(100% - 50px) !important; margin: 8px auto 2px; } /* renglones bajo la foto */
       #maskEditor.sending { min-height: 560px; justify-content: flex-start; } /* lugar para el sobre y el mensaje */
 
       /* Botones: a todo el ancho y más fáciles de tocar */
       .mask-editor-tools, .final-block, .save-only { width: calc(100% - 32px); }
       .mask-editor-tools { flex-wrap: wrap; }
       #maskChange { flex: 1 1 100%; }
-      .primary-btn, .toggle-btn { min-height: 42px; font-size: 13px; }
+      .primary-btn, .toggle-btn { min-height: 38px; font-size: 13px; }
+      .mask-editor-tools { row-gap: 6px; }
       .mask-editor-hint, #postcardHint { padding: 0 16px; text-align: center; }
 
-      .complete-prompt { padding: 0 16px; max-width: 100%; font-size: 19px; }
+      .complete-prompt { padding: 0 16px; max-width: 100%; font-size: 15px; }
       .sent-message { width: calc(100% - 32px); top: 6%; }
       .sent-message .sent-question { font-size: min(28px, 6.4vw); } /* las dos líneas caben en el teléfono */
       #resultViewer img { max-width: 92%; max-height: 70%; }
@@ -1201,7 +1204,7 @@ function buildInterface() {
   // Panel izquierdo, de arriba abajo. Sección 1: título
   const colTitle = createDiv().id("colTitle").addClass("col").parent(panel);
 
-  createElement("h1", "Ahora cada espacio<br>de mí es un poema")
+  createElement("h1", "Ahora cada espacio <br>de mí es un poema")
     .id("title")
     .parent(colTitle);
   createP("Una experiencia web interactiva para cubrirte y plasmarte en un poema. Subes tu retrato, escribes tus palabras y estas se distribuyen dentro de tu silueta.")
@@ -1699,15 +1702,38 @@ function placeMaskEditor() {
   }
 }
 
+// Teléfono: cuánto alto le queda a la foto del editor para que todo quepa
+// en la pantalla. Se mide dónde empieza el editor en la página y cuánto
+// ocupa todo lo que tiene además de la foto (botones, textos, renglones).
+const MOBILE_EDITOR_MIN_H = 150;
+function mobileEditorFreeHeight() {
+  const editorTop = maskEditorEl.getBoundingClientRect().top + window.scrollY;
+  const st = getComputedStyle(maskEditorEl);
+  const gap = parseFloat(st.rowGap) || 0;
+  let others = parseFloat(st.paddingTop) + parseFloat(st.paddingBottom);
+  let visible = 0;
+  for (const child of maskEditorEl.children) {
+    const cs = getComputedStyle(child);
+    if (cs.display === "none" || cs.position === "absolute" || cs.position === "fixed") continue;
+    visible++;
+    if (child === editorCardEl) continue;
+    others += child.offsetHeight + parseFloat(cs.marginTop) + parseFloat(cs.marginBottom);
+  }
+  others += gap * Math.max(0, visible - 1);
+  const free = window.innerHeight - editorTop - others - 4;
+  return Math.max(MOBILE_EDITOR_MIN_H, free);
+}
+
 // La foto ocupa lo más posible del lado derecho, sin deformarse
 function sizeMaskEditor() {
   if (!maskEditorOpen || !photoReady) return;
   let maxW, maxH;
   if (isMobile()) {
-    // Todo el ancho del panel; de alto, lo justo para que quepan los botones
+    // Todo el ancho del panel; de alto, lo que queda libre en la pantalla
+    // (sin scroll) después de lo de arriba y de los botones y textos del editor
     const panelEl = document.getElementById("panel");
     maxW = panelEl.clientWidth - 32;
-    maxH = window.innerHeight * 0.42;
+    maxH = mobileEditorFreeHeight();
   } else {
     const area = viewerArea();
     maxW = area.w * 0.7;
@@ -2675,6 +2701,25 @@ function updateStepUI() {
   });
   updateStepNav(step);
   placePoemBox(step);
+  refitMobileEditor();
+}
+
+// En el teléfono, si cambió lo que rodea a la foto del editor (otra etapa,
+// otros botones), se ajusta su tamaño para seguir sin scroll. Solo se
+// redibuja si el tamaño de verdad cambia.
+function refitMobileEditor() {
+  if (!isMobile() || !maskEditorOpen || !photoReady || !maskEditorEl) return;
+  if (refitMobileEditor.queued) return;
+  refitMobileEditor.queued = true;
+  requestAnimationFrame(() => {
+    refitMobileEditor.queued = false;
+    if (!maskEditorOpen) return;
+    const ratio = originalImg.width / originalImg.height;
+    const panelEl = document.getElementById("panel");
+    const w = Math.floor(Math.min(panelEl.clientWidth - 32, mobileEditorFreeHeight() * ratio));
+    const current = parseFloat(maskEditorCanvasEl.style.width) || 0;
+    if (Math.abs(w - current) > 2) sizeMaskEditor();
+  });
 }
 
 // En el teléfono, en la etapa del poema dentro del editor (tras "Listo" en
