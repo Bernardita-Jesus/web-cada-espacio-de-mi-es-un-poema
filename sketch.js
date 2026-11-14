@@ -14,6 +14,7 @@
 // ---------------------------------------------------------------------
 const CONFIG = {
   maxCanvasSize: 2000,         // tamaño máximo de lado (evita que fotos enormes de celular colapsen el navegador)
+  maxCanvasSizeMobile: 1400,   // en el teléfono, más chico: con poca memoria, Safari recarga la página
 
   maskFeather: 2,              // suaviza el borde de la silueta detectada
   cellCoverageThreshold: 140,  // qué tan "segura" debe estar la detección
@@ -1222,10 +1223,18 @@ function buildInterface() {
   // Sección 2: subir foto + vista previa
   const colPhoto = createDiv().id("colPhoto").addClass("col step-card").parent(panel);
 
-  // Input de archivo escondido; se activa al tocar el recuadro de la vista previa
-  fileInputEl = createFileInput(handleFileSelected);
+  // Input de archivo escondido; se activa al tocar el recuadro de la vista previa.
+  // Es un input normal (no createFileInput de p5), porque p5 copia la foto
+  // entera como texto antes de abrirla, y en el teléfono eso gasta mucha memoria
+  fileInputEl = createElement("input");
+  fileInputEl.attribute("type", "file");
+  fileInputEl.attribute("accept", "image/*");
   fileInputEl.hide();
   fileInputEl.parent(colPhoto);
+  fileInputEl.elt.addEventListener("change", () => {
+    const file = fileInputEl.elt.files && fileInputEl.elt.files[0];
+    if (file) handleFileSelected(file);
+  });
 
   // Vista previa: la foto con la zona detectada como retrato marcada.
   // El mismo recuadro sirve para subir (o cambiar) el autorretrato.
@@ -1337,25 +1346,65 @@ function showPhotoError(msg) {
   showPhotoError.timer = setTimeout(() => el.remove(), 9000);
 }
 
+// Abre la foto ya recortada (si es muy vertical) y achicada, dibujándola
+// una sola vez en un lienzo del tamaño final. Así nunca hay copias de la
+// foto completa del celular (12 megapíxeles) en memoria.
+// file: un File del input, o { data: url } (para pruebas).
+function loadPhoto(file, maxSize, onDone, onFail) {
+  const isBlob = typeof Blob !== "undefined" && file instanceof Blob;
+  const src = isBlob ? URL.createObjectURL(file) : file.data;
+  const im = new Image();
+  const cleanup = () => { if (isBlob) URL.revokeObjectURL(src); im.onload = im.onerror = null; };
+  im.onload = () => {
+    try {
+      const srcW = im.naturalWidth, srcH = im.naturalHeight;
+      if (!srcW || !srcH) { cleanup(); onFail(); return; }
+      // Muy vertical: se recorta a 4:5, más de abajo que de arriba
+      let sy = 0, sh = srcH;
+      const maxH = Math.round(srcW * MAX_TALL_RATIO);
+      if (srcH > maxH) { sy = Math.round((srcH - maxH) * CROP_TOP_SHARE); sh = maxH; }
+      const scale = maxSize ? Math.min(1, maxSize / Math.max(srcW, sh)) : 1;
+      const w = Math.max(1, Math.round(srcW * scale));
+      const h = Math.max(1, Math.round(sh * scale));
+      const pimg = createImage(w, h);
+      pimg.drawingContext.drawImage(im, 0, sy, srcW, sh, 0, 0, w, h);
+      cleanup();
+      onDone(pimg);
+    } catch (err) {
+      console.error(err);
+      cleanup();
+      onFail();
+    }
+  };
+  im.onerror = () => { cleanup(); onFail(); };
+  im.src = src;
+}
+
 function handleFileSelected(file) {
   const name = (file.name || "").toLowerCase();
-  const isHeic = /\.(heic|heif)$/.test(name) || /heic|heif/.test(file.subtype || "");
+  const mime = (file.type || "").toLowerCase();
+  const isHeic = /\.(heic|heif)$/.test(name) || /heic|heif/.test(mime) || /heic|heif/.test(file.subtype || "");
   if (isHeic) {
     showPhotoError("Esta foto es HEIC (formato del iPhone) y el navegador no puede abrirla. " +
       "Expórtala como JPG (en Fotos: Archivo › Exportar) o en el iPhone usa Ajustes › Cámara › Formatos › Más compatible.");
     return;
   }
-  if (file.type !== "image") {
+  const isImage = mime.startsWith("image/") || mime === "image" || (!mime && /\.(jpe?g|png|webp|gif)$/.test(name));
+  if (!isImage) {
     showPhotoError("El archivo elegido no es una imagen. Prueba con una foto JPG o PNG.");
     return;
   }
 
   const failed = () => showPhotoError("No se pudo abrir esta foto. Prueba con otra en JPG o PNG.");
-  loadImage(file.data, (img) => {
+  const maxSize = isMobile() ? CONFIG.maxCanvasSizeMobile : CONFIG.maxCanvasSize;
+  loadPhoto(file, maxSize, (img) => {
     if (!img || !img.width) { failed(); return; }
     const err = document.getElementById("photoError");
     if (err) err.remove();
-    originalImg = fitImageToMax(cropIfTooTall(img), CONFIG.maxCanvasSize);
+    // Se sueltan la foto y la silueta anteriores antes de seguir
+    releaseImage(originalImg);
+    releaseImage(maskImg);
+    originalImg = img;
     resizeCanvas(originalImg.width, originalImg.height);
     layoutBoxes();
 
@@ -1432,15 +1481,22 @@ function drawPhotoWithMask(canvasEl) {
   ctx.drawImage(originalImg.canvas, x, y, drawW, drawH);
 
   if (maskReady && maskImg) {
-    // Pinta de turquesa solo donde la máscara dice "persona"
-    const tint = document.createElement("canvas");
-    tint.width = imgW;
-    tint.height = imgH;
+    // Pinta de turquesa solo donde la máscara dice "persona". Se usa siempre
+    // el mismo lienzo y del tamaño en pantalla: crear uno nuevo del tamaño
+    // de la foto en cada trazo llenaba la memoria del iPhone
+    const tw = Math.max(1, Math.round(drawW * dpr));
+    const th = Math.max(1, Math.round(drawH * dpr));
+    if (!drawPhotoWithMask.tint) drawPhotoWithMask.tint = document.createElement("canvas");
+    const tint = drawPhotoWithMask.tint;
+    if (tint.width !== tw) tint.width = tw;
+    if (tint.height !== th) tint.height = th;
     const tctx = tint.getContext("2d");
-    tctx.drawImage(maskImg.canvas, 0, 0);
+    tctx.globalCompositeOperation = "source-over";
+    tctx.clearRect(0, 0, tw, th);
+    tctx.drawImage(maskImg.canvas, 0, 0, tw, th);
     tctx.globalCompositeOperation = "source-in";
     tctx.fillStyle = "#2FB5A8"; // turquesa
-    tctx.fillRect(0, 0, imgW, imgH);
+    tctx.fillRect(0, 0, tw, th);
 
     ctx.globalAlpha = 0.5;
     ctx.drawImage(tint, x, y, drawW, drawH);
@@ -2292,7 +2348,10 @@ function portadaFile() {
 }
 
 function contraportadaFile() {
-  return canvasToFile(drawBackCanvas(), "contraportada-" + Date.now() + ".jpg");
+  const backCanvas = drawBackCanvas();
+  const file = canvasToFile(backCanvas, "contraportada-" + Date.now() + ".jpg");
+  backCanvas.width = backCanvas.height = 0; // suelta su memoria (importante en el iPhone)
+  return file;
 }
 
 // Las dos juntas (en el teléfono, un solo menú para guardar ambas)
@@ -2730,30 +2789,16 @@ function refreshSaveButton() {
   for (const row of finalRows) row.classList.toggle("ready", ready);
 }
 
+// Suelta la memoria de una imagen de p5 que ya no se usa (en el iPhone los
+// lienzos viejos no se liberan solos a tiempo)
+function releaseImage(img) {
+  if (img && img.canvas) { img.canvas.width = 0; img.canvas.height = 0; }
+}
+
 // Si la foto es muy vertical (por ejemplo 9:16 de celular), se recorta a
 // 4:5. Se corta más de abajo que de arriba, para no perder la cabeza.
 const MAX_TALL_RATIO = 5 / 4;   // alto / ancho máximo permitido
 const CROP_TOP_SHARE = 0.3;     // de lo que sobra, cuánto se corta arriba (el resto, abajo)
-function cropIfTooTall(img) {
-  const maxH = Math.round(img.width * MAX_TALL_RATIO);
-  if (img.height <= maxH) return img;
-  const extra = img.height - maxH;
-  return img.get(0, Math.round(extra * CROP_TOP_SHARE), img.width, maxH);
-}
-
-// Achica la imagen solo si CONFIG.maxCanvasSize tiene un valor definido.
-// Por defecto no se toca, para conservar la calidad original de la foto.
-function fitImageToMax(img, maxSize) {
-  if (!maxSize) return img;
-
-  const w = img.width;
-  const h = img.height;
-  const scale = Math.min(1, maxSize / Math.max(w, h));
-  if (scale < 1) {
-    img.resize(Math.round(w * scale), Math.round(h * scale));
-  }
-  return img;
-}
 
 // Cambia el color del poema y lo vuelve a dibujar al instante
 // (sin repetir la detección de la persona).
