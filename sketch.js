@@ -288,8 +288,15 @@ function buildPostcards() {
   const cardH = Math.max(40, (H - gap * (rows + 1)) / rows); // las filas + espacios
   const cardW = cardH * POSTCARD_RATIO;
   const rowLength = W + cardW;         // de totalmente afuera a un lado, a totalmente afuera al otro
-  const pathLength = rowLength * rows; // las filas seguidas
-  const count = Math.max(1, Math.floor(pathLength / (cardW + gap)));
+  let pathLength = rowLength * rows; // las filas seguidas
+  let count = Math.max(1, Math.floor(pathLength / (cardW + gap)));
+  // Si hay más obras que lugares en el recorrido (pasa en el teléfono, con
+  // una sola fila), el recorrido se alarga: las que sobran esperan fuera de
+  // la pantalla y van entrando, así pasan todas
+  if (count < galleryEntries.length) {
+    count = galleryEntries.length;
+    pathLength = count * (cardW + gap);
+  }
 
   postcardLayout = { W, cardW, cardH, rowLength, pathLength, rows, gap, spacing: pathLength / count };
   postcardEls = [];
@@ -407,17 +414,40 @@ function sizeLargePostcard() {
   fitPoemText(postcardBackEls.poem);
 }
 
-// Si el poema no cabe en el reverso (sobre "Poema por"), achica un poco
-// su letra hasta que quepa entero
+// Si el poema no cabe en el reverso (sobre "Poema por"), sigue en una
+// segunda columna al lado (o una tercera), como en la contraportada
+// guardada (ver fitPoemColumns). Solo si ni así cabe, achica la letra.
 function fitPoemText(poemEl) {
   if (!poemEl) return;
-  const box = poemEl.parentElement; // .pc-message: poema + "Poema por"
-  let em = 0.85;                    // tamaño normal (ver .pc-poem)
-  poemEl.style.fontSize = em + "em";
-  if (!box.clientHeight) return;    // todavía no se ve: se ajusta al abrir
-  while (box.scrollHeight > box.clientHeight + 1 && em > 0.35) {
-    em *= 0.95;
+  const box = poemEl.parentElement;         // .pc-message: poema + "Poema por"
+  const authorEl = poemEl.nextElementSibling;
+  const reset = () => {
+    poemEl.style.fontSize = "0.85em";       // tamaño normal (ver .pc-poem)
+    poemEl.style.height = "";
+    poemEl.style.columnCount = "";
+  };
+  reset();
+  if (!box.clientHeight) return;            // todavía no se ve: se ajusta al abrir
+  if (box.scrollHeight <= box.clientHeight + 1) return; // cabe tal cual
+
+  // Alto disponible para el poema: todo menos "Poema por"
+  const poemH = box.clientHeight - (authorEl ? authorEl.offsetHeight : 0);
+  poemEl.style.height = Math.max(0, poemH) + "px";
+  // Con alto fijo y columnas que se llenan hasta abajo, lo que no cabe
+  // se va a columnas extra a la derecha: eso es lo que se mide
+  const fits = () => poemEl.scrollWidth <= poemEl.clientWidth + 1;
+  const tryLayout = (n, em) => {
+    poemEl.style.columnCount = n;
     poemEl.style.fontSize = em + "em";
+    return fits();
+  };
+  for (let n = 1; n <= 3; n++) {
+    for (let em = 0.85; em >= 0.85 * 0.6; em *= 0.95) {
+      if (tryLayout(n, em)) return;
+    }
+  }
+  for (let em = 0.85 * 0.6; em > 0.17; em *= 0.95) {
+    if (tryLayout(3, em)) return;
   }
 }
 
@@ -459,7 +489,9 @@ function placePostcards() {
 
   postcardEls.forEach((el, i) => {
     const s = (postcardProgress + i * spacing) % pathLength;
-    const leg = Math.floor(s / rowLength); // 0 = abajo, 1 = medio, 2 = arriba
+    // 0 = abajo, 1 = medio, 2 = arriba. Si el recorrido es más largo que las
+    // filas, el resto queda en la última fila, fuera de la pantalla, esperando
+    const leg = Math.min(rows - 1, Math.floor(s / rowLength));
     const t = s - leg * rowLength;         // avance dentro de esa fila
     const goingLeft = leg % 2 === 0;       // abajo y arriba van hacia la izquierda
     const x = goingLeft ? W - t : -cardW + t;
@@ -1021,6 +1053,8 @@ function injectStyles() {
     }
     .pc-message { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
     .pc-poem { font-size: 0.85em; line-height: 1.3; white-space: pre-line; } /* respeta los saltos de línea */
+    /* Poema largo: columnas que se llenan hasta abajo y siguen al lado (ver fitPoemText) */
+    .pc-poem { column-fill: auto; column-gap: 1.6em; flex-shrink: 0; overflow: hidden; }
     .pc-author { margin-top: auto; padding-top: 1em; font-size: 0.7em; color: #888888; } /* siempre al fondo */
     .pc-divider { width: 1px; background: #CCCCCC; }
     .pc-address { flex: 1; min-width: 0; display: flex; flex-direction: column; font-size: 0.7em; } /* datos más pequeños que el poema */
@@ -1169,7 +1203,7 @@ function buildInterface() {
   createElement("h1", "Ahora cada espacio<br>de mí es un poema")
     .id("title")
     .parent(colTitle);
-  createP("Una experiencia web interactiva para cubrirte y plasmarte en un poema. Subes tu autorretrato, escribes tus palabras y estas se distribuyen dentro de tu silueta.")
+  createP("Una experiencia web interactiva para cubrirte y plasmarte en un poema. Subes tu retrato, escribes tus palabras y estas se distribuyen dentro de tu silueta.")
     .id("subtitle")
     .parent(colTitle);
 
@@ -2272,6 +2306,72 @@ function savePortada() {
   saveImageFiles([portadaFile()]);
 }
 
+// Reparte el poema en columnas para el reverso guardado. Prueba con 1, 2
+// y 3 columnas (en ese orden), cada una con la letra normal y, si hace
+// falta, un poco más chica (hasta minShare); se queda con la primera que
+// cabe. Si nada cabe, usa 3 columnas y sigue achicando la letra.
+// measureFor(size) devuelve una función que mide el ancho de un texto.
+function fitPoemColumns(poem, areaW, areaH, startSize, measureFor) {
+  const LINE = 1.3;          // alto de renglón, como .pc-poem
+  const minShare = 0.6;      // con 1 o 2 columnas, la letra baja hasta el 60%
+  const wrap = (size, width) => {
+    const measure = measureFor(size);
+    const lines = [];
+    for (const para of poem.split("\n")) {
+      if (!para.trim()) { lines.push(""); continue; }
+      let line = "";
+      for (const w of para.split(" ")) {
+        const test = line ? line + " " + w : w;
+        if (measure(test) > width && line) { lines.push(line); line = w; }
+        else line = test;
+      }
+      if (line) lines.push(line);
+    }
+    return lines;
+  };
+  // Llena cada columna hasta abajo y pasa a la siguiente (sin empezar
+  // una columna con un renglón vacío). null = no cabe en n columnas.
+  const split = (lines, perCol, n) => {
+    const cols = [[]];
+    for (const line of lines) {
+      let col = cols[cols.length - 1];
+      if (col.length >= perCol) {
+        if (cols.length === n) return null;
+        col = [];
+        cols.push(col);
+      }
+      if (!line && col.length === 0) continue;
+      col.push(line);
+    }
+    return cols;
+  };
+  const tryLayout = (size, n) => {
+    const colGap = size * 2;
+    const colWidth = (areaW - colGap * (n - 1)) / n;
+    const perCol = Math.max(1, Math.floor(areaH / (size * LINE)));
+    const columns = split(wrap(size, colWidth), perCol, n);
+    return columns && { size, lineHeight: size * LINE, colWidth, colGap, columns };
+  };
+  for (let n = 1; n <= 3; n++) {
+    for (let size = startSize; size >= startSize * minShare; size *= 0.95) {
+      const fit = tryLayout(size, n);
+      if (fit) return fit;
+    }
+  }
+  let size = startSize * minShare;
+  while (size > startSize * 0.2) {
+    const fit = tryLayout(size, 3);
+    if (fit) return fit;
+    size *= 0.95;
+  }
+  // Último recurso: 3 columnas, lo que quepa
+  const colGap = size * 2, colWidth = (areaW - colGap * 2) / 3;
+  const perCol = Math.max(1, Math.floor(areaH / (size * LINE)));
+  const lines = wrap(size, colWidth);
+  return { size, lineHeight: size * LINE, colWidth, colGap,
+    columns: [lines.slice(0, perCol), lines.slice(perCol, 2 * perCol), lines.slice(2 * perCol, 3 * perCol)] };
+}
+
 // Dibuja el reverso como imagen, del mismo tamaño que la foto
 function drawBackCanvas() {
   const W = originalImg.width, H = originalImg.height;
@@ -2288,40 +2388,25 @@ function drawBackCanvas() {
   ctx.fillRect(0, 0, W, H);
 
   const colW = (W - 2 * pad - 2 * gap) / 2;
-  // Poema (respeta los saltos de línea y parte las líneas largas)
-  // Arma los renglones con un tamaño de letra dado ("" = renglón vacío)
-  const poemLines = (size) => {
-    ctx.font = font(size);
-    const lines = [];
-    for (const para of d.poem.split("\n")) {
-      if (!para.trim()) { lines.push(""); continue; }
-      let line = "";
-      for (const w of para.split(" ")) {
-        const test = line ? line + " " + w : w;
-        if (ctx.measureText(test).width > colW && line) { lines.push(line); line = w; }
-        else line = test;
-      }
-      if (line) lines.push(line);
-    }
-    return lines;
-  };
-  // Si no cabe entero sobre "Poema por", la letra se achica de a poco
+  // Poema (respeta los saltos de línea y parte las líneas largas).
+  // Si es largo y no cabe sobre "Poema por", sigue en una segunda columna
+  // al lado (o una tercera); solo si ni así cabe, la letra se achica.
   const poemMaxH = H - 2 * pad - base * 0.7 * 2; // deja lugar para "Poema por" y un espacio
-  let poemSize = base * 0.85;
-  let lines = poemLines(poemSize);
-  while (lines.length * poemSize * 1.3 > poemMaxH && poemSize > base * 0.3) {
-    poemSize *= 0.95;
-    lines = poemLines(poemSize);
-  }
-  const lh = poemSize * 1.3;
+  const layout = fitPoemColumns(d.poem, colW, poemMaxH, base * 0.85, (size) => {
+    ctx.font = font(size);
+    return (text) => ctx.measureText(text).width;
+  });
   ctx.fillStyle = "#444444";
   ctx.textBaseline = "top";
-  ctx.font = font(poemSize);
-  let y = pad;
-  for (const line of lines) {
-    if (line) ctx.fillText(line, pad, y);
-    y += lh;
-  }
+  ctx.font = font(layout.size);
+  layout.columns.forEach((colLines, ci) => {
+    const x = pad + ci * (layout.colWidth + layout.colGap);
+    let y = pad;
+    for (const line of colLines) {
+      if (line) ctx.fillText(line, x, y);
+      y += layout.lineHeight;
+    }
+  });
   // Poema por
   ctx.fillStyle = "#888888";
   ctx.font = font(base * 0.7);
