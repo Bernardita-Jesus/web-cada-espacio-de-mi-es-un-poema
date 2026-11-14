@@ -173,16 +173,8 @@ function backTextHeight(w, h) {
 
 // Con una vista en grande abierta, la página de atrás no hace scroll
 function updateScrollLock() {
-  // En el teléfono el editor va dentro de la página: queda fija mientras
-  // está abierto (así no se mueve al pintar), salvo que la pantalla sea tan
-  // baja que no quepa todo; en ese caso se deja hacer scroll para llegar a
-  // los botones
-  let mobileEditorLock = false;
-  if (maskEditorOpen && isMobile()) {
-    const fits = document.documentElement.scrollHeight <= window.innerHeight + 4;
-    mobileEditorLock = fits;
-  }
-  const open = (maskEditorOpen && !isMobile()) || mobileEditorLock || resultViewerOpen || postcardViewerOpen;
+  // (En el teléfono la página ya es fija, sin scroll: ver el @media del teléfono)
+  const open = (maskEditorOpen && !isMobile()) || resultViewerOpen || postcardViewerOpen;
   document.body.classList.toggle("viewer-open", open);
 }
 
@@ -1134,12 +1126,13 @@ function injectStyles() {
        El panel arriba a todo el ancho, las postales debajo, y la página
        hace scroll. Las vistas en grande cubren toda la pantalla. */
     @media (max-width: 700px), (max-height: 500px) and (orientation: landscape) {
-      html, body { height: auto; overflow-x: hidden; overflow-y: auto; }
-      body.viewer-open { overflow: hidden; } /* con algo abierto, no se mueve lo de atrás */
-      html, body { overscroll-behavior: none; } /* sin el "rebote" de la página al arrastrar */
-      html:has(body.viewer-open) { overflow: hidden; } /* en el iPhone el candado va también en <html> */
+      /* La página no tiene scroll: queda fija a la pantalla. Así no se mueve
+         al pintar, no rebota y no se recarga al tirar hacia abajo (eso borraba
+         la foto). Para recargar, el botón del navegador. */
+      html, body { height: 100%; overflow: hidden; overscroll-behavior: none; }
+      body { position: fixed; inset: 0; width: 100%; }
       /* Arriba una fila de postales chicas; abajo el panel, que llena el resto */
-      #app { flex-direction: column; width: 100%; height: auto; min-height: 100vh; min-height: 100svh; }
+      #app { flex-direction: column; width: 100%; height: 100%; }
       #below {
         order: -1; flex: none; height: 92px; /* postales chicas: deja lugar para editar sin scroll */
         background: #F3EDDC; /* hueso */
@@ -1148,7 +1141,10 @@ function injectStyles() {
       .postcard.postcard-empty { background-color: #E2C16B; } /* postales vacías: amarillo mostaza suave */
       .postcard { font-size: 22px; } /* número de prueba, a la medida de la postal chica */
       #panel {
-        flex: 1; width: 100%; min-width: 0; overflow: visible;
+        flex: 1; width: 100%; min-width: 0; min-height: 0;
+        /* Solo si en una pantalla muy baja algo no cabe, el panel se desplaza
+           por dentro (sin mover ni recargar la página) */
+        overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain;
         border-right: none; padding-top: 4px; padding-bottom: 0;
       }
       #colTitle {
@@ -1189,6 +1185,9 @@ function injectStyles() {
       }
       #maskEditor #poemBox { width: calc(100% - 50px) !important; margin: 8px auto 2px; } /* renglones bajo la foto */
       #maskEditor.sending { min-height: 560px; justify-content: flex-start; } /* lugar para el sobre y el mensaje */
+      /* Sin estampilla ni sobre en el teléfono: el sobre escondido bajo el
+         editor hacía que el panel se pudiera desplazar */
+      #maskEditor .envelope { display: none; }
 
       /* Botones: a todo el ancho y más fáciles de tocar */
       .mask-editor-tools, .final-block, .save-only { width: calc(100% - 32px); }
@@ -1744,6 +1743,7 @@ function sizeMaskEditor() {
     // Todo el ancho del panel; de alto, lo que queda libre en la pantalla
     // (sin scroll) después de lo de arriba y de los botones y textos del editor
     const panelEl = document.getElementById("panel");
+    panelEl.scrollTop = 0; // se mide con el panel arriba del todo
     maxW = panelEl.clientWidth - 32;
     maxH = mobileEditorFreeHeight();
   } else {
@@ -1760,9 +1760,8 @@ function sizeMaskEditor() {
   editorCardEl.style.setProperty("--h", backTextHeight(w, h) + "px");
   if (editorBackEls) fitPoemText(editorBackEls.poem);
   if (isMobile()) {
-    document.body.classList.remove("viewer-open"); // se mide sin el candado
-    window.scrollTo(0, 0);                         // todo el editor a la vista
-    updateScrollLock();
+    const panelEl = document.getElementById("panel");
+    if (panelEl) panelEl.scrollTop = 0;            // todo el editor a la vista
   }
   if (editorPhase === "edit") {
     maskEditorFit = drawPhotoWithMask(maskEditorCanvasEl);
